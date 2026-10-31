@@ -1,0 +1,33 @@
+name: Claude review
+
+# Off by default. Set the repository variable ENABLE_CLAUDE_REVIEW to true and add the
+# ANTHROPIC_API_KEY secret to turn it on. Each run uses API credits.
+# pull_request runs from forks get no secrets, so outside contributors cannot reach the key.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    if: vars.ENABLE_CLAUDE_REVIEW == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Review the diff
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          claude -p "Review the diff from origin/$BASE_REF to HEAD against .claude/rules/. Report only concrete bugs, security flaws and contract breaks, with file and line." \
+            --allowedTools "Read,Grep,Glob,Bash(git diff *)" >> "$GITHUB_STEP_SUMMARY"

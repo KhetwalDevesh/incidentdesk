@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+.env.production
+secrets/
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/agent-memory-local/
+.DS_Store

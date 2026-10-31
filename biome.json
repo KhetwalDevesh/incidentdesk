@@ -1,0 +1,21 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"files": {
+		"includes": ["**", "!**/*.md", "!contracts/openapi.yaml", "!pnpm-lock.yaml"]
+	},
+	"formatter": { "indentStyle": "tab", "lineWidth": 100 },
+	"linter": {
+		"rules": {
+			"preset": "recommended",
+			"suspicious": { "noExplicitAny": "error", "noConsole": "error" },
+			"style": { "noEnum": "error", "noNonNullAssertion": "error" },
+			"correctness": { "noUnusedImports": "error", "noUnusedVariables": "error" }
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["scripts/**", "src/server.ts"],
+			"linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+		}
+	]
+}
