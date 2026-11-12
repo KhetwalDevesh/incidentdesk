@@ -2,16 +2,22 @@
 
 A multi-tenant incident management API, built to practise AI-assisted development with Claude Code. Rules, contracts and enforcement exist from the first commit.
 
-**Status:** Phase 1. The API has an in-memory repository and development tokens, so it is not production-ready. See the [roadmap](docs/spec.md#roadmap).
+**Status:** Phase 2 in progress. Incidents are stored in Postgres. Authentication still uses development tokens, so it is not production-ready. See the [roadmap](docs/spec.md#roadmap).
 
 ## Quick start
+
+Needs Node 22, pnpm and Docker.
 
 ```bash
 pnpm install
 cp .env.example .env
-pnpm check
+pnpm db:up        # Postgres 17 in Docker, on port 54329
+pnpm db:migrate   # apply db/migrations
+pnpm check        # the parity tests use the incidentdesk_test database
 pnpm dev
 ```
+
+`pnpm db:down` stops Postgres and keeps its data volume.
 
 ## Layout
 
