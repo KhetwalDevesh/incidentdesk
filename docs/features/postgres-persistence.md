@@ -57,5 +57,5 @@ None. The contract and `contracts/openapi.yaml` stay byte-identical.
 - [x] A parity test runs the same repository calls against in-memory and Postgres, including tenant isolation and the compare-and-set update (`tests/incidentRepository.parity.test.ts`)
 - [x] Concurrent `update` calls on Postgres yield exactly one winner ("lets exactly one of many concurrent updates win")
 - [x] Contract unchanged (`pnpm contract:check`)
-- [ ] CI runs the parity test against a Postgres service (configured in `ci.yml`, not yet seen green on GitHub)
+- [x] CI runs the parity test against a Postgres service (PR #2, `tests` job: 18 parity tests passed)
 - [x] `pnpm check` passes
