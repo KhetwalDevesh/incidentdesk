@@ -33,4 +33,11 @@ export const incidentRoutes = (service: IncidentService) =>
 
 			const result = await service.get(c.get("principal"), parsed.data);
 			return respond(c, result, (incident) => c.json(toIncidentResponse(incident)));
+		})
+		.post("/:id/acknowledge", async (c) => {
+			const parsed = IncidentIdSchema.safeParse(c.req.param("id"));
+			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
+
+			const result = await service.acknowledge(c.get("principal"), parsed.data);
+			return respond(c, result, (incident) => c.json(toIncidentResponse(incident)));
 		});

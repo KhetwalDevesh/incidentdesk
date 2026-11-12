@@ -33,12 +33,18 @@ components:
         createdAt:
           type: string
           format: date-time
+        acknowledgedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
       required:
         - id
         - title
         - severity
         - status
         - createdAt
+        - acknowledgedAt
       additionalProperties: false
     Problem:
       type: object
@@ -57,6 +63,7 @@ components:
             - UNAUTHENTICATED
             - FORBIDDEN
             - NOT_FOUND
+            - CONFLICT
             - VALIDATION_FAILED
             - INTERNAL
         detail:
@@ -243,6 +250,54 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "404":
           description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/acknowledge:
+    post:
+      summary: Acknowledge an open incident
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: The acknowledged incident
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Role cannot acknowledge incidents
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Incident is not open
           content:
             application/problem+json:
               schema:

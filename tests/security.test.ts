@@ -26,6 +26,27 @@ describe("tenant isolation", () => {
 		expect(IncidentListSchema.parse(await res.json()).total).toBe(0);
 	});
 
+	it("hides another tenant's incident from acknowledge, and leaves it open", async () => {
+		const res = await app.request(
+			`/v1/incidents/${incidentId}/acknowledge`,
+			authed("globex-responder", {}),
+		);
+
+		expect(res.status).toBe(404);
+		const check = await app.request(`/v1/incidents/${incidentId}`, authed("acme-responder"));
+		expect(IncidentSchema.parse(await check.json()).status).toBe("open");
+	});
+
+	it("never exposes acknowledgedBy, even when the body tries to set it", async () => {
+		const res = await app.request(
+			`/v1/incidents/${incidentId}/acknowledge`,
+			authed("acme-responder", { acknowledgedBy: "user-999", tenantId: "tenant-globex" }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(await res.json()).not.toHaveProperty("acknowledgedBy");
+	});
+
 	it("rejects a client-supplied tenantId", async () => {
 		const res = await app.request(
 			"/v1/incidents",

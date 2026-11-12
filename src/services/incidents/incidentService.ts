@@ -19,8 +19,28 @@ export const createIncidentService = (
 			status: "open",
 			createdAt: now(),
 			createdBy: principal.userId,
+			acknowledgedAt: null,
+			acknowledgedBy: null,
 		});
 		return ok(incident);
+	},
+
+	async acknowledge(principal, id) {
+		if (!canRespond(principal)) {
+			return fail("FORBIDDEN", "Your role cannot acknowledge incidents");
+		}
+		const incident = await repository.findById(principal.tenantId, id);
+		if (!incident) return fail("NOT_FOUND", "Incident not found");
+		if (incident.status !== "open") {
+			return fail("CONFLICT", `Incident is ${incident.status}, not open`);
+		}
+		const updated = await repository.update(principal.tenantId, id, "open", {
+			status: "acknowledged",
+			acknowledgedAt: now(),
+			acknowledgedBy: principal.userId,
+		});
+		// null means a concurrent request changed the status after our read.
+		return updated ? ok(updated) : fail("CONFLICT", "Incident is no longer open");
 	},
 
 	async get(principal, id) {

@@ -72,6 +72,22 @@ registry.registerPath({
 	},
 });
 
+registry.registerPath({
+	method: "post",
+	path: "/v1/incidents/{id}/acknowledge",
+	summary: "Acknowledge an open incident",
+	security,
+	request: { params: z.object({ id: z.uuid() }) },
+	responses: {
+		200: json(IncidentSchema, "The acknowledged incident"),
+		...authErrors,
+		403: problem("Role cannot acknowledge incidents"),
+		404: problem("No such incident in this tenant"),
+		409: problem("Incident is not open"),
+		422: problem("Id is not a UUID"),
+	},
+});
+
 export const buildOpenApiDocument = () =>
 	new OpenApiGeneratorV31(registry.definitions).generateDocument({
 		openapi: "3.1.0",

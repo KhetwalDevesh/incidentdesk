@@ -1,6 +1,6 @@
 import type { PageQuery } from "../../contract/common";
 import type { IncidentId } from "../../contract/incidents";
-import type { Incident, IncidentRepository } from "../../domain/incidents/types";
+import type { Incident, IncidentChanges, IncidentRepository } from "../../domain/incidents/types";
 import type { TenantId } from "../../domain/shared/identity";
 
 export class InMemoryIncidentRepository implements IncidentRepository {
@@ -22,5 +22,19 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 			.filter((incident) => incident.tenantId === tenantId)
 			.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 		return { items: owned.slice(offset, offset + limit), total: owned.length };
+	}
+
+	// No await between the check and the write, so the compare-and-set is atomic.
+	async update(
+		tenantId: TenantId,
+		id: IncidentId,
+		expectedStatus: Incident["status"],
+		changes: IncidentChanges,
+	): Promise<Incident | null> {
+		const current = this.incidents.get(id);
+		if (current?.tenantId !== tenantId || current.status !== expectedStatus) return null;
+		const updated = { ...current, ...changes };
+		this.incidents.set(id, updated);
+		return updated;
 	}
 }

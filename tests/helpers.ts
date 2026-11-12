@@ -6,7 +6,7 @@ import { createIncidentService } from "../src/services/incidents/incidentService
 export const buildTestApp = () =>
 	createApp({
 		authenticate: createDevTokenAuthenticator(
-			"acme-responder:tenant-acme:user-1:responder,acme-viewer:tenant-acme:user-2:viewer,globex-responder:tenant-globex:user-3:responder",
+			"acme-responder:tenant-acme:user-1:responder,acme-viewer:tenant-acme:user-2:viewer,globex-responder:tenant-globex:user-3:responder,acme-admin:tenant-acme:user-4:admin",
 		),
 		incidentService: createIncidentService(new InMemoryIncidentRepository()),
 	});
