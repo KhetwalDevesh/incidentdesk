@@ -2,7 +2,7 @@
 
 A multi-tenant incident management API, built to practise AI-assisted development with Claude Code. Rules, contracts and enforcement exist from the first commit.
 
-**Status:** Phase 2 in progress. Incidents are stored in Postgres. Authentication still uses development tokens, so it is not production-ready. See the [roadmap](docs/spec.md#roadmap).
+**Status:** Phase 2 in progress. Incidents and accounts are stored in Postgres, and the API issues its own JWTs. Login has no rate limiting yet, so it is not production-ready. See the [roadmap](docs/spec.md#roadmap).
 
 ## Quick start
 

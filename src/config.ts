@@ -6,7 +6,9 @@ const DatabaseEnvSchema = z.object({
 
 const EnvSchema = DatabaseEnvSchema.extend({
 	PORT: z.coerce.number().int().positive().default(3000),
-	DEV_API_TOKENS: z.string().min(1),
+	// Signs access tokens. Generate with: openssl rand -base64 48
+	JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+	ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
 });
 
 export type Config = z.infer<typeof EnvSchema>;

@@ -9,6 +9,7 @@ describe("checkFile", () => {
 		["1-no-direct-env", "src/services/a.ts", "const x = process.env.KEY;"],
 		["2-layer-boundary", "src/services/a.ts", 'import x from "../../repository/a/b";'],
 		["2-layer-boundary", "src/domain/a/b.ts", 'import x from "../../http/app";'],
+		["2-layer-boundary", "src/services/a/b.ts", 'import x from "../../adapters/hasher";'],
 		["3-contract-isolation", "src/contract/a.ts", 'import x from "../domain/a/b";'],
 		["4-no-client-identity", "src/routes/a.ts", "const id = body.tenantId;"],
 		["4-no-client-identity", "src/routes/a.ts", 'const id = c.req.param("tenantId");'],
@@ -19,6 +20,7 @@ describe("checkFile", () => {
 	it.each([
 		["config may read env", "src/config.ts", "process.env"],
 		["services may import domain", "src/services/a.ts", 'import x from "../../domain/a/b";'],
+		["containers may import adapters", "src/containers/a.ts", 'import x from "../adapters/a";'],
 		["identity from principal", "src/routes/a.ts", "principal.tenantId"],
 		["tests are exempt", "src/services/a.test.ts", "process.env.KEY"],
 	])("allows: %s", (_name, file, source) => {

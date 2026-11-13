@@ -1,6 +1,6 @@
 # IncidentDesk
 
-Multi-tenant incident management API. Product scope: @docs/spec.md. Status: Phase 2 in progress. Incidents persist in Postgres; auth still uses dev tokens.
+Multi-tenant incident management API. Product scope: @docs/spec.md. Status: Phase 2 in progress. Incidents and accounts persist in Postgres; the API issues its own JWTs.
 
 ## Commands
 
@@ -24,6 +24,7 @@ Dependencies point inward. Full reasoning: `docs/architecture.md`.
 | Domain           | `src/domain/`              | Contract                       |
 | Services         | `src/services/`            | Domain, contract               |
 | Repositories     | `src/repository/`          | Domain, contract               |
+| Adapters         | `src/adapters/`            | Domain, contract               |
 | Mappers          | `src/mappers/`             | Domain, contract               |
 | HTTP and routes  | `src/http/`, `src/routes/` | Everything except repositories |
 | Composition root | `src/containers/`          | Everything                     |

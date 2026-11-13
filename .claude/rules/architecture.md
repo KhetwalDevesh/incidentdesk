@@ -21,7 +21,7 @@ Reference: the `incidents` module.
 
 ## Don't
 
-- Don't import `src/http`, `src/routes`, `src/repository` or `src/containers` from domain or services. `pnpm enforce` check 2 fails this.
+- Don't import `src/http`, `src/routes`, `src/repository`, `src/adapters` or `src/containers` from domain or services. `pnpm enforce` check 2 fails this.
 - Don't import application code into `src/contract`. Check 3 fails this.
 - Don't read `process.env` outside `src/config.ts`. Check 1 fails this.
 - Don't add a helper for one caller.

@@ -17,6 +17,7 @@ src/services    roles and business rules, returns Result<T>
 src/domain      ports (interfaces) and entities
   ▲
 src/repository  implements the port: Postgres in the app, in-memory in unit tests, a parity test keeps them equal
+src/adapters    implements non-storage ports: password hashing, token signing
 
 src/mappers     turns an entity into a response on the way out
 src/containers  wires concrete classes together
