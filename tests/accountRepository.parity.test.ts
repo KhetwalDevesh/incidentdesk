@@ -58,7 +58,7 @@ describe.each([
 
 	beforeEach(async () => {
 		if (name === "postgres") {
-			await pool.query("TRUNCATE password_setup_tokens, users, tenants");
+			await pool.query("TRUNCATE notification_channels, password_setup_tokens, users, tenants");
 		}
 		repository = make();
 		tenant = newTenant();

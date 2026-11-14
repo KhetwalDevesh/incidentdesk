@@ -1,0 +1,79 @@
+# Slack notifications
+
+Status: Draft
+
+Phase 4. Decided by the user: option A, Slack incoming webhook URLs. This draft fixes the data model. The API, delivery worker and message format are still to be specified.
+
+## Goal
+
+Post a message to a tenant's own Slack channel when an incident is opened, so the team learns about it without watching the API.
+
+## User flow
+
+1. An admin creates an incoming webhook in Slack for a channel, such as `#shopkart-incidents`.
+2. The admin adds it to IncidentDesk with a display name and a minimum severity.
+3. When an incident at or above that severity is opened, IncidentDesk posts to every enabled channel of that tenant.
+
+## Permissions
+
+| Action | Viewer | Responder | Admin |
+|---|---|---|---|
+| List notification channels | No | No | Yes |
+| Add, enable, disable or delete a channel | No | No | Yes |
+
+## API changes
+
+To be specified. Expected shape: `GET`, `POST` and `DELETE` under `/v1/notification-channels`. The webhook URL is accepted on create and never returned.
+
+## Data changes
+
+Migration `0003_create_notification_channels.sql` adds `notification_channels`:
+
+| Column | Purpose |
+|---|---|
+| `tenant_id`, `id` | Primary key, tenant first |
+| `kind` | `slack_webhook` only, so other kinds can be added later |
+| `name` | Display name, such as `#shopkart-incidents`. Unique per tenant |
+| `target_ciphertext` | The webhook URL, encrypted by the application. The plaintext URL is never stored |
+| `target_hint` | Last 4 characters of the URL, so the API can show a masked value without decrypting |
+| `min_severity` | Lowest severity that notifies. `sev4` means every incident |
+| `enabled` | Lets an admin pause a channel without deleting it |
+| `created_at` | Ordering for lists |
+
+A tenant can have several channels, for example `sev1` to `#oncall` and everything to `#incidents`.
+
+## Edge cases and failures
+
+- Slack is down or slow: incident creation still succeeds. Delivery runs outside the request, after the Phase 3 queue exists.
+- Slack returns 404 or `invalid_token` for a revoked webhook: record the failure. Disabling the channel automatically is to be decided.
+- No enabled channel: nothing is sent.
+
+## Security
+
+- The webhook URL is a secret, because anyone holding it can post to the channel. It is encrypted at rest, never returned, never logged.
+- Only `https://hooks.slack.com/` URLs are accepted. This stops the server being pointed at internal addresses (SSRF).
+- `tenantId` comes from the principal. Isolation tests cover list, create and delete across tenants.
+- The encryption key comes from config and a secret manager in production. Losing it makes stored URLs unreadable, so admins would re-enter them.
+
+## Out of scope
+
+- Slack app with OAuth and buttons (option B)
+- Mentioning the on-call person
+- Email, SMS and phone
+
+## Open questions
+
+1. Encryption scheme and key rotation. Proposed: AES-256-GCM with a random nonce per value, key from `NOTIFICATION_ENCRYPTION_KEY`.
+2. Which events notify: opened only, or also acknowledged and resolved.
+3. Whether a channel is disabled after repeated delivery failures.
+
+## Done when
+
+- [x] Migration adds `notification_channels` with tenant-first keys and indexes
+- [ ] API specified and approved
+- [ ] Webhook URLs encrypted at rest, proven by a repository test that reads the raw column
+- [ ] Non-Slack URLs rejected (`tests/security.test.ts`)
+- [ ] Tenant isolation tests added
+- [ ] An opened incident posts to the tenant's channel through the queue
+- [ ] Contract regenerated, with no breaking change
+- [ ] `pnpm check` passes
