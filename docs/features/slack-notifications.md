@@ -51,7 +51,7 @@ A tenant can have several channels, for example `sev1` to `#oncall` and everythi
 ## Security
 
 - The webhook URL is a secret, because anyone holding it can post to the channel. It is encrypted at rest, never returned, never logged.
-- Only `https://hooks.slack.com/` URLs are accepted. This stops the server being pointed at internal addresses (SSRF).
+- Decided by the user: any webhook URL is accepted, with no host, scheme or address restriction. `http` is allowed, and so are private, loopback and cloud metadata addresses. Accepted risk: an admin can make the server send requests to internal addresses (SSRF), and an `http` URL is sent unencrypted.
 - `tenantId` comes from the principal. Isolation tests cover list, create and delete across tenants.
 - The encryption key comes from config and a secret manager in production. Losing it makes stored URLs unreadable, so admins would re-enter them.
 
@@ -72,7 +72,6 @@ A tenant can have several channels, for example `sev1` to `#oncall` and everythi
 - [x] Migration adds `notification_channels` with tenant-first keys and indexes
 - [ ] API specified and approved
 - [ ] Webhook URLs encrypted at rest, proven by a repository test that reads the raw column
-- [ ] Non-Slack URLs rejected (`tests/security.test.ts`)
 - [ ] Tenant isolation tests added
 - [ ] An opened incident posts to the tenant's channel through the queue
 - [ ] Contract regenerated, with no breaking change
