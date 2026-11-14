@@ -8,7 +8,7 @@ export type Baseline = Record<string, number>;
 const ESCAPE_HATCH = /biome-ignore|@ts-ignore|@ts-expect-error|as unknown as/g;
 const CLIENT_IDENTITY = /\b(?:body|json|query|param|params|input)\b[.(["']+tenantId\b/;
 const INNER_LAYER = /^src\/(domain|services)\//;
-const OUTER_IMPORT = /from\s+["'][^"']*\/(http|routes|repository|containers)\//;
+const OUTER_IMPORT = /from\s+["'][^"']*\/(http|routes|repository|adapters|containers)\//;
 const CONTRACT_ONLY = /^src\/contract\//;
 const CONTRACT_FORBIDDEN = /from\s+["'][^"']*\/(domain|services|repository|http|routes)\//;
 

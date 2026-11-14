@@ -20,7 +20,11 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 	async list(tenantId: TenantId, { limit, offset }: PageQuery) {
 		const owned = [...this.incidents.values()]
 			.filter((incident) => incident.tenantId === tenantId)
-			.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+			// Same order as Postgres: newest first, then id. Lowercase UUID text sorts like its bytes.
+			.sort(
+				(a, b) =>
+					b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+			);
 		return { items: owned.slice(offset, offset + limit), total: owned.length };
 	}
 

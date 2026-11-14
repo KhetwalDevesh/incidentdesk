@@ -44,6 +44,22 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: incidentdesk
+          POSTGRES_PASSWORD: incidentdesk
+          POSTGRES_DB: incidentdesk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U incidentdesk -d incidentdesk_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgres://incidentdesk:incidentdesk@localhost:5432/incidentdesk_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
