@@ -8,4 +8,6 @@ export const toIncidentResponse = (incident: Incident): IncidentResponse => ({
 	severity: incident.severity,
 	status: incident.status,
 	createdAt: incident.createdAt.toISOString(),
+	acknowledgedAt: incident.acknowledgedAt?.toISOString() ?? null,
+	resolvedAt: incident.resolvedAt?.toISOString() ?? null,
 });

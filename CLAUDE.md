@@ -1,12 +1,14 @@
 # IncidentDesk
 
-Multi-tenant incident management API. Product scope: @docs/spec.md. Status: Phase 1 foundation with an in-memory repository; Postgres arrives in Phase 2.
+Multi-tenant incident management API. Product scope: @docs/spec.md. Status: Phase 2 in progress. Incidents and accounts persist in Postgres; the API issues its own JWTs.
 
 ## Commands
 
 - Install: `pnpm install`
+- Start Postgres in Docker: `pnpm db:up` (stop with `pnpm db:down`)
+- Apply migrations: `pnpm db:migrate`
 - Run API: `pnpm dev` (copy `.env.example` to `.env` first)
-- All checks: `pnpm check`
+- All checks: `pnpm check` (needs `pnpm db:up` for the repository parity tests)
 - One test file: `pnpm vitest run path/to/file.test.ts`
 - Typecheck: `pnpm typecheck`
 - Lint and format: `pnpm lint:fix`
@@ -22,6 +24,7 @@ Dependencies point inward. Full reasoning: `docs/architecture.md`.
 | Domain           | `src/domain/`              | Contract                       |
 | Services         | `src/services/`            | Domain, contract               |
 | Repositories     | `src/repository/`          | Domain, contract               |
+| Adapters         | `src/adapters/`            | Domain, contract               |
 | Mappers          | `src/mappers/`             | Domain, contract               |
 | HTTP and routes  | `src/http/`, `src/routes/` | Everything except repositories |
 | Composition root | `src/containers/`          | Everything                     |

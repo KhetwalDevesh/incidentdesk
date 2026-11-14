@@ -33,12 +33,24 @@ components:
         createdAt:
           type: string
           format: date-time
+        acknowledgedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        resolvedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
       required:
         - id
         - title
         - severity
         - status
         - createdAt
+        - acknowledgedAt
+        - resolvedAt
       additionalProperties: false
     Problem:
       type: object
@@ -57,6 +69,7 @@ components:
             - UNAUTHENTICATED
             - FORBIDDEN
             - NOT_FOUND
+            - CONFLICT
             - VALIDATION_FAILED
             - INTERNAL
         detail:
@@ -121,6 +134,256 @@ components:
         - total
         - limit
         - offset
+      additionalProperties: false
+    AccessToken:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          enum:
+            - Bearer
+        expiresIn:
+          type: integer
+      required:
+        - accessToken
+        - tokenType
+        - expiresIn
+      additionalProperties: false
+    SignupRequest:
+      type: object
+      properties:
+        tenantName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          maxLength: 254
+          format: email
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+      required:
+        - tenantName
+        - email
+        - password
+      additionalProperties: false
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          format: email
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+        - email
+        - password
+      additionalProperties: false
+    SetupPasswordRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 200
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+      required:
+        - token
+        - password
+      additionalProperties: false
+    MemberList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Member"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    Member:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        role:
+          type: string
+          enum:
+            - viewer
+            - responder
+            - admin
+        status:
+          type: string
+          enum:
+            - pending
+            - active
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - role
+        - status
+        - createdAt
+      additionalProperties: false
+    MemberInvite:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        role:
+          type: string
+          enum:
+            - viewer
+            - responder
+            - admin
+        status:
+          type: string
+          enum:
+            - pending
+            - active
+        createdAt:
+          type: string
+          format: date-time
+        setupToken:
+          type: string
+        setupTokenExpiresAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - role
+        - status
+        - createdAt
+        - setupToken
+        - setupTokenExpiresAt
+      additionalProperties: false
+      description: The setup token is shown only in this response
+    AddMemberRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          format: email
+        role:
+          type: string
+          enum:
+            - viewer
+            - responder
+            - admin
+      required:
+        - email
+        - role
+      additionalProperties: false
+    NotificationChannelList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationChannel"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    NotificationChannel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+            - slack_webhook
+        name:
+          type: string
+        webhookUrlHint:
+          type: string
+        minSeverity:
+          type: string
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - kind
+        - name
+        - webhookUrlHint
+        - minSeverity
+        - enabled
+        - createdAt
+      additionalProperties: false
+      description: The webhook URL is never returned. webhookUrlHint shows its last 4
+        characters.
+    CreateNotificationChannelRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        webhookUrl:
+          type: string
+          maxLength: 2048
+          format: uri
+        minSeverity:
+          type: string
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+          default: sev4
+        enabled:
+          type: boolean
+          default: true
+      required:
+        - name
+        - webhookUrl
       additionalProperties: false
   parameters: {}
 paths:
@@ -249,6 +512,355 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/acknowledge:
+    post:
+      summary: Acknowledge an open incident
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: The acknowledged incident
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Role cannot acknowledge incidents
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Incident is not open
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/resolve:
+    post:
+      summary: Resolve an open or acknowledged incident
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: The resolved incident
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Role cannot resolve incidents
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Incident is already resolved, or changed while resolving
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/auth/signup:
+    post:
+      summary: Create a tenant with the caller as its admin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupRequest"
+      responses:
+        "201":
+          description: An access token for the API
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessToken"
+        "409":
+          description: Email is already registered
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/auth/login:
+    post:
+      summary: Exchange email and password for a token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: An access token for the API
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessToken"
+        "401":
+          description: Email or password is incorrect
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/auth/setup-password:
+    post:
+      summary: Set a new member's password with a setup token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetupPasswordRequest"
+      responses:
+        "200":
+          description: An access token for the API
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessToken"
+        "401":
+          description: Setup token is invalid, used or expired
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/members:
+    get:
+      summary: List members of the caller's tenant
+      security: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can list members
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      summary: Add a member to the caller's tenant
+      security: *a1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddMemberRequest"
+      responses:
+        "201":
+          description: Member added, pending until they set a password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberInvite"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can add members
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Email is already registered
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/notification-channels:
+    get:
+      summary: List the caller's tenant's notification channels
+      security: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of notification channels
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannelList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can list notification channels
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      summary: Add a Slack incoming webhook to the caller's tenant
+      security: *a1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNotificationChannelRequest"
+      responses:
+        "201":
+          description: Channel added. The webhook URL is not returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can add notification channels
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The tenant already has a channel with this name
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
           content:
             application/problem+json:
               schema:

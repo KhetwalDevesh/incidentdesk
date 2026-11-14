@@ -1,6 +1,8 @@
+import { MEMBER_ROLES } from "../../contract/members";
+
 export type TenantId = string & { readonly __brand: "TenantId" };
 
-export const ROLES = ["viewer", "responder", "admin"] as const;
+export const ROLES = MEMBER_ROLES;
 export type Role = (typeof ROLES)[number];
 
 export type Principal = {
@@ -10,3 +12,5 @@ export type Principal = {
 };
 
 export const canRespond = (principal: Principal): boolean => principal.role !== "viewer";
+
+export const isAdmin = (principal: Principal): boolean => principal.role === "admin";
