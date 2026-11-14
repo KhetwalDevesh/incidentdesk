@@ -23,7 +23,19 @@ Post a message to a tenant's own Slack channel when an incident is opened, so th
 
 ## API changes
 
-To be specified. Expected shape: `GET`, `POST` and `DELETE` under `/v1/notification-channels`. The webhook URL is accepted on create and never returned.
+Requested by the user, so an admin can set the webhook URL with curl.
+
+| Method | Path | Success | Errors |
+|---|---|---|---|
+| POST | `/v1/notification-channels` | 201 with the channel | 401, 403, 409, 422 |
+| GET | `/v1/notification-channels` | 200 with a page of channels | 401, 403, 422 |
+
+- Create body: `{ name, webhookUrl, minSeverity?, enabled? }`. `minSeverity` defaults to `sev4` and `enabled` to `true`. Unknown fields get 422.
+- Channel response: `{ id, kind, name, webhookUrlHint, minSeverity, enabled, createdAt }`. `webhookUrlHint` is `…` plus the last 4 characters. The full URL is never returned, including in the create response.
+- A second channel with the same name in the same tenant: 409.
+- Delete, enable and disable come later.
+
+Encryption, answering open question 1: AES-256-GCM with a random 12-byte nonce per value. The tenant id and channel id are bound as associated data, so a ciphertext copied to another row or tenant fails to decrypt. The key is `NOTIFICATION_ENCRYPTION_KEY`, 32 bytes in base64. A leading version byte leaves room for key rotation.
 
 ## Data changes
 
@@ -63,16 +75,18 @@ A tenant can have several channels, for example `sev1` to `#oncall` and everythi
 
 ## Open questions
 
-1. Encryption scheme and key rotation. Proposed: AES-256-GCM with a random nonce per value, key from `NOTIFICATION_ENCRYPTION_KEY`.
+1. Key rotation: how to re-encrypt stored URLs under a new key.
 2. Which events notify: opened only, or also acknowledged and resolved.
 3. Whether a channel is disabled after repeated delivery failures.
 
 ## Done when
 
 - [x] Migration adds `notification_channels` with tenant-first keys and indexes
-- [ ] API specified and approved
-- [ ] Webhook URLs encrypted at rest, proven by a repository test that reads the raw column
-- [ ] Tenant isolation tests added
+- [x] An admin can create and list channels, and a viewer or responder gets 403 (`tests/notificationChannels.contract.test.ts`)
+- [x] The full webhook URL never appears in a response (`tests/security.test.ts`, "notification channels")
+- [x] Webhook URLs encrypted at rest, proven by a repository test that reads the raw column (`tests/notificationChannelRepository.parity.test.ts`)
+- [x] A ciphertext moved to another tenant or channel fails to decrypt (same test, and `src/adapters/aesGcmSecretBox.test.ts`)
+- [x] Tenant isolation tests added
 - [ ] An opened incident posts to the tenant's channel through the queue
-- [ ] Contract regenerated, with no breaking change
+- [x] Contract regenerated, with no breaking change (no removed lines)
 - [ ] `pnpm check` passes

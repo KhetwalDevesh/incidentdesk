@@ -5,6 +5,7 @@ import { AccessTokenSchema } from "../src/contract/auth";
 import { ProblemSchema } from "../src/contract/common";
 import { IncidentListSchema, IncidentSchema } from "../src/contract/incidents";
 import { MemberInviteSchema, MemberListSchema } from "../src/contract/members";
+import { NotificationChannelListSchema } from "../src/contract/notificationChannels";
 import { authed, buildTestApp, post, signup, TEST_JWT_SECRET } from "./helpers";
 
 const PASSWORD = "correct horse battery";
@@ -267,6 +268,68 @@ describe("member management", () => {
 
 	it("leaves no route public except the token-issuing ones", async () => {
 		expect((await app.request("/v1/auth/unknown", post({}))).status).toBe(401);
+	});
+});
+
+describe("notification channels", () => {
+	const SECRET_URL = "https://hooks.slack.com/services/T000/B000/s3cretTokenPart";
+	const PATH = "/v1/notification-channels";
+	let app: ReturnType<typeof buildTestApp>;
+
+	beforeEach(() => {
+		app = buildTestApp();
+	});
+
+	it("never returns the webhook URL, on create or list", async () => {
+		const created = await app.request(
+			PATH,
+			authed("acme-admin", { name: "#incidents", webhookUrl: SECRET_URL }),
+		);
+		const listed = await app.request(PATH, authed("acme-admin"));
+
+		expect(created.status).toBe(201);
+		for (const body of [await created.text(), await listed.text()]) {
+			expect(body).not.toContain("s3cretTokenPart");
+			expect(body).not.toContain("hooks.slack.com");
+			expect(body).not.toContain("Ciphertext");
+		}
+	});
+
+	it("keeps each tenant's channels separate", async () => {
+		await app.request(PATH, authed("acme-admin", { name: "#incidents", webhookUrl: SECRET_URL }));
+		const globexAdmin = await signup(app, "admin@globex.example", "Globex");
+
+		const res = await app.request(PATH, authed(globexAdmin));
+
+		expect(NotificationChannelListSchema.parse(await res.json()).total).toBe(0);
+		const sameName = await app.request(
+			PATH,
+			authed(globexAdmin, { name: "#incidents", webhookUrl: SECRET_URL }),
+		);
+		expect(sameName.status).toBe(201);
+	});
+
+	it("rejects a client-supplied tenantId", async () => {
+		const res = await app.request(
+			PATH,
+			authed("acme-admin", { name: "#x", webhookUrl: SECRET_URL, tenantId: "tenant-globex" }),
+		);
+
+		expect(res.status).toBe(422);
+		const list = await app.request(PATH, authed("acme-admin"));
+		expect(NotificationChannelListSchema.parse(await list.json()).total).toBe(0);
+	});
+
+	it("refuses viewers and responders, even with a valid body", async () => {
+		for (const token of ["acme-viewer", "acme-responder"]) {
+			const res = await app.request(
+				PATH,
+				authed(token, { name: "#sneaky", webhookUrl: SECRET_URL }),
+			);
+			expect(res.status).toBe(403);
+		}
+		const list = await app.request(PATH, authed("acme-admin"));
+		expect(NotificationChannelListSchema.parse(await list.json()).total).toBe(0);
 	});
 });
 

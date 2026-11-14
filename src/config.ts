@@ -9,6 +9,13 @@ const EnvSchema = DatabaseEnvSchema.extend({
 	// Signs access tokens. Generate with: openssl rand -base64 48
 	JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
 	ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
+	// Encrypts notification webhook URLs at rest. 32 bytes, base64. Generate with: openssl rand -base64 32
+	NOTIFICATION_ENCRYPTION_KEY: z
+		.string()
+		.refine(
+			(value) => Buffer.from(value, "base64").length === 32,
+			"NOTIFICATION_ENCRYPTION_KEY must be 32 bytes, base64-encoded",
+		),
 });
 
 export type Config = z.infer<typeof EnvSchema>;

@@ -303,6 +303,88 @@ components:
         - email
         - role
       additionalProperties: false
+    NotificationChannelList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationChannel"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    NotificationChannel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+            - slack_webhook
+        name:
+          type: string
+        webhookUrlHint:
+          type: string
+        minSeverity:
+          type: string
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - kind
+        - name
+        - webhookUrlHint
+        - minSeverity
+        - enabled
+        - createdAt
+      additionalProperties: false
+      description: The webhook URL is never returned. webhookUrlHint shows its last 4
+        characters.
+    CreateNotificationChannelRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        webhookUrl:
+          type: string
+          maxLength: 2048
+          format: uri
+        minSeverity:
+          type: string
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+          default: sev4
+        enabled:
+          type: boolean
+          default: true
+      required:
+        - name
+        - webhookUrl
+      additionalProperties: false
   parameters: {}
 paths:
   /health:
@@ -687,6 +769,92 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "409":
           description: Email is already registered
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/notification-channels:
+    get:
+      summary: List the caller's tenant's notification channels
+      security: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of notification channels
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannelList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can list notification channels
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      summary: Add a Slack incoming webhook to the caller's tenant
+      security: *a1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNotificationChannelRequest"
+      responses:
+        "201":
+          description: Channel added. The webhook URL is not returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationChannel"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can add notification channels
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The tenant already has a channel with this name
           content:
             application/problem+json:
               schema:

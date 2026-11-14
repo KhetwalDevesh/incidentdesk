@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { AuthService, MemberService } from "../domain/auth/types";
 import type { IncidentService } from "../domain/incidents/types";
+import type { NotificationChannelService } from "../domain/notifications/types";
 import { authRoutes } from "../routes/auth";
 import { healthRoutes } from "../routes/health";
 import { incidentRoutes } from "../routes/incidents";
 import { memberRoutes } from "../routes/members";
+import { notificationChannelRoutes } from "../routes/notificationChannels";
 import { type Authenticator, requireAuth } from "./auth";
 import { problemResponse } from "./problem";
 import type { AppEnv } from "./types";
@@ -18,6 +20,7 @@ export type AppDeps = {
 	authService: AuthService;
 	incidentService: IncidentService;
 	memberService: MemberService;
+	notificationChannelService: NotificationChannelService;
 };
 
 export const createApp = ({
@@ -25,6 +28,7 @@ export const createApp = ({
 	authService,
 	incidentService,
 	memberService,
+	notificationChannelService,
 }: AppDeps) => {
 	const app = new Hono<AppEnv>();
 
@@ -49,6 +53,7 @@ export const createApp = ({
 	app.use("/v1/*", requireAuth(authenticate));
 	app.route("/v1/incidents", incidentRoutes(incidentService));
 	app.route("/v1/members", memberRoutes(memberService));
+	app.route("/v1/notification-channels", notificationChannelRoutes(notificationChannelService));
 
 	return app;
 };

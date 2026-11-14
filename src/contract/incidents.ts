@@ -4,6 +4,8 @@ import "./common";
 export const INCIDENT_SEVERITIES = ["sev1", "sev2", "sev3", "sev4"] as const;
 export const INCIDENT_STATUSES = ["open", "acknowledged", "resolved"] as const;
 
+export type IncidentSeverity = (typeof INCIDENT_SEVERITIES)[number];
+
 export const IncidentIdSchema = z.uuid().brand<"IncidentId">();
 export type IncidentId = z.infer<typeof IncidentIdSchema>;
 

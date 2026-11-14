@@ -9,6 +9,11 @@ import {
 import { PageQuerySchema, ProblemSchema } from "./common";
 import { CreateIncidentRequestSchema, IncidentListSchema, IncidentSchema } from "./incidents";
 import { AddMemberRequestSchema, MemberInviteSchema, MemberListSchema } from "./members";
+import {
+	CreateNotificationChannelRequestSchema,
+	NotificationChannelListSchema,
+	NotificationChannelSchema,
+} from "./notificationChannels";
 
 const registry = new OpenAPIRegistry();
 const bearer = registry.registerComponent("securitySchemes", "bearerAuth", {
@@ -178,6 +183,39 @@ registry.registerPath({
 		...authErrors,
 		403: problem("Only admins can add members"),
 		409: problem("Email is already registered"),
+		422: problem("Request body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/notification-channels",
+	summary: "List the caller's tenant's notification channels",
+	security,
+	request: { query: PageQuerySchema },
+	responses: {
+		200: json(NotificationChannelListSchema, "A page of notification channels"),
+		...authErrors,
+		403: problem("Only admins can list notification channels"),
+		422: problem("Query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/notification-channels",
+	summary: "Add a Slack incoming webhook to the caller's tenant",
+	security,
+	request: {
+		body: {
+			content: { "application/json": { schema: CreateNotificationChannelRequestSchema } },
+		},
+	},
+	responses: {
+		201: json(NotificationChannelSchema, "Channel added. The webhook URL is not returned"),
+		...authErrors,
+		403: problem("Only admins can add notification channels"),
+		409: problem("The tenant already has a channel with this name"),
 		422: problem("Request body failed validation"),
 	},
 });

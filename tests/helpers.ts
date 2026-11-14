@@ -1,3 +1,4 @@
+import { createAesGcmSecretBox } from "../src/adapters/aesGcmSecretBox";
 import { createArgon2PasswordHasher } from "../src/adapters/argon2PasswordHasher";
 import { createJwtTokenService } from "../src/adapters/jwtTokenService";
 import { AccessTokenSchema } from "../src/contract/auth";
@@ -5,11 +6,15 @@ import type { Principal, TenantId } from "../src/domain/shared/identity";
 import { createApp } from "../src/http/app";
 import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAccountRepository";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
+import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { createAuthService } from "../src/services/auth/authService";
 import { createIncidentService } from "../src/services/incidents/incidentService";
 import { createMemberService } from "../src/services/members/memberService";
+import { createNotificationChannelService } from "../src/services/notifications/notificationChannelService";
 
 export const TEST_JWT_SECRET = "test-secret-that-is-at-least-32-characters";
+// 32 zero bytes. Tests only.
+export const TEST_ENCRYPTION_KEY = Buffer.alloc(32).toString("base64");
 
 // Fixed tokens for tests about incidents, so they need no signup. Real JWTs work alongside them.
 const FIXED_TOKENS: Record<string, Principal> = {
@@ -26,7 +31,12 @@ const FIXED_TOKENS: Record<string, Principal> = {
 // Cheap argon2 costs keep the suite fast. Production uses the library defaults.
 export const testHasher = () => createArgon2PasswordHasher({ memoryCost: 1024, timeCost: 1 });
 
-export const buildTestApp = (options: { tokenNowMs?: () => number } = {}) => {
+export const buildTestApp = (
+	options: {
+		tokenNowMs?: () => number;
+		notificationChannels?: InMemoryNotificationChannelRepository;
+	} = {},
+) => {
 	const accounts = new InMemoryAccountRepository();
 	const authService = createAuthService({
 		credentials: accounts,
@@ -39,6 +49,10 @@ export const buildTestApp = (options: { tokenNowMs?: () => number } = {}) => {
 		authService,
 		incidentService: createIncidentService(new InMemoryIncidentRepository()),
 		memberService: createMemberService(accounts),
+		notificationChannelService: createNotificationChannelService(
+			options.notificationChannels ?? new InMemoryNotificationChannelRepository(),
+			createAesGcmSecretBox(TEST_ENCRYPTION_KEY),
+		),
 	});
 };
 
