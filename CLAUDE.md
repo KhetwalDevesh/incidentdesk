@@ -8,6 +8,7 @@ Multi-tenant incident management API. Product scope: @docs/spec.md. Status: Phas
 - Start Postgres in Docker: `pnpm db:up` (stop with `pnpm db:down`)
 - Apply migrations: `pnpm db:migrate`
 - Run API: `pnpm dev` (copy `.env.example` to `.env` first)
+- Local webhook receiver for notification channels: `pnpm dev:receiver --port 4000 --mode ok` (modes and runtime switching in `scripts/dev-receiver.ts`)
 - All checks: `pnpm check` (needs `pnpm db:up` for the repository parity tests)
 - One test file: `pnpm vitest run path/to/file.test.ts`
 - Typecheck: `pnpm typecheck`
