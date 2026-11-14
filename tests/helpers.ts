@@ -35,6 +35,7 @@ export const buildTestApp = (
 	options: {
 		tokenNowMs?: () => number;
 		notificationChannels?: InMemoryNotificationChannelRepository;
+		channelNow?: () => Date;
 	} = {},
 ) => {
 	const accounts = new InMemoryAccountRepository();
@@ -52,6 +53,7 @@ export const buildTestApp = (
 		notificationChannelService: createNotificationChannelService(
 			options.notificationChannels ?? new InMemoryNotificationChannelRepository(),
 			createAesGcmSecretBox(TEST_ENCRYPTION_KEY),
+			options.channelNow,
 		),
 	});
 };

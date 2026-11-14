@@ -53,6 +53,14 @@ describe("notification channels contract", () => {
 	});
 
 	it("lists channels in the documented shape, oldest first", async () => {
+		// A clock that ticks one second per call, so the two channels never share a created_at.
+		let tick = Date.parse("2026-11-01T00:00:00Z");
+		app = buildTestApp({
+			channelNow: () => {
+				tick += 1000;
+				return new Date(tick);
+			},
+		});
 		await app.request(PATH, authed("acme-admin", validBody));
 		await app.request(PATH, authed("acme-admin", { ...validBody, name: "#oncall" }));
 
