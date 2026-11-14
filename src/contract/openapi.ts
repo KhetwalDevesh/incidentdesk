@@ -95,6 +95,22 @@ registry.registerPath({
 	},
 });
 
+registry.registerPath({
+	method: "post",
+	path: "/v1/incidents/{id}/resolve",
+	summary: "Resolve an open or acknowledged incident",
+	security,
+	request: { params: z.object({ id: z.uuid() }) },
+	responses: {
+		200: json(IncidentSchema, "The resolved incident"),
+		...authErrors,
+		403: problem("Role cannot resolve incidents"),
+		404: problem("No such incident in this tenant"),
+		409: problem("Incident is already resolved, or changed while resolving"),
+		422: problem("Id is not a UUID"),
+	},
+});
+
 // Public: these routes issue tokens, so they have no security requirement.
 const tokenPath = (
 	path: string,

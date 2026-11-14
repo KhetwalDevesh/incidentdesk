@@ -44,6 +44,28 @@ describe("tenant isolation", () => {
 		expect(IncidentSchema.parse(await check.json()).status).toBe("open");
 	});
 
+	it("hides another tenant's incident from resolve, and leaves it open", async () => {
+		const res = await app.request(
+			`/v1/incidents/${incidentId}/resolve`,
+			authed("globex-responder", {}),
+		);
+
+		expect(res.status).toBe(404);
+		const check = await app.request(`/v1/incidents/${incidentId}`, authed("acme-responder"));
+		const incident = IncidentSchema.parse(await check.json());
+		expect(incident).toMatchObject({ status: "open", resolvedAt: null });
+	});
+
+	it("never exposes resolvedBy, even when the body tries to set it", async () => {
+		const res = await app.request(
+			`/v1/incidents/${incidentId}/resolve`,
+			authed("acme-responder", { resolvedBy: "user-999", tenantId: "tenant-globex" }),
+		);
+
+		expect(res.status).toBe(200);
+		expect(await res.json()).not.toHaveProperty("resolvedBy");
+	});
+
 	it("never exposes acknowledgedBy, even when the body tries to set it", async () => {
 		const res = await app.request(
 			`/v1/incidents/${incidentId}/acknowledge`,

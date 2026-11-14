@@ -38,6 +38,11 @@ components:
             - string
             - "null"
           format: date-time
+        resolvedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
       required:
         - id
         - title
@@ -45,6 +50,7 @@ components:
         - status
         - createdAt
         - acknowledgedAt
+        - resolvedAt
       additionalProperties: false
     Problem:
       type: object
@@ -466,6 +472,54 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "409":
           description: Incident is not open
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/resolve:
+    post:
+      summary: Resolve an open or acknowledged incident
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: The resolved incident
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Role cannot resolve incidents
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Incident is already resolved, or changed while resolving
           content:
             application/problem+json:
               schema:

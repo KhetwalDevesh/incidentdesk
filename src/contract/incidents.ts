@@ -25,6 +25,7 @@ export const IncidentSchema = z
 		status: z.enum(INCIDENT_STATUSES),
 		createdAt: z.iso.datetime(),
 		acknowledgedAt: z.iso.datetime().nullable(),
+		resolvedAt: z.iso.datetime().nullable(),
 	})
 	.openapi("Incident");
 

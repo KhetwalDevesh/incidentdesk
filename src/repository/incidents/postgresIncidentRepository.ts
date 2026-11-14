@@ -10,7 +10,7 @@ import type {
 import type { TenantId } from "../../domain/shared/identity";
 
 const COLUMNS =
-	"id, tenant_id, title, severity, status, created_at, created_by, acknowledged_at, acknowledged_by";
+	"id, tenant_id, title, severity, status, created_at, created_by, acknowledged_at, acknowledged_by, resolved_at, resolved_by";
 
 type IncidentRow = {
 	id: string;
@@ -22,6 +22,8 @@ type IncidentRow = {
 	created_by: string;
 	acknowledged_at: Date | null;
 	acknowledged_by: string | null;
+	resolved_at: Date | null;
+	resolved_by: string | null;
 };
 
 const toIncident = (row: IncidentRow): Incident => ({
@@ -34,6 +36,8 @@ const toIncident = (row: IncidentRow): Incident => ({
 	createdBy: row.created_by,
 	acknowledgedAt: row.acknowledged_at,
 	acknowledgedBy: row.acknowledged_by,
+	resolvedAt: row.resolved_at,
+	resolvedBy: row.resolved_by,
 });
 
 // The only columns update may write. Values always go in as parameters.
@@ -41,6 +45,8 @@ const CHANGE_COLUMNS: Record<keyof IncidentChanges, string> = {
 	status: "status",
 	acknowledgedAt: "acknowledged_at",
 	acknowledgedBy: "acknowledged_by",
+	resolvedAt: "resolved_at",
+	resolvedBy: "resolved_by",
 };
 const CHANGE_KEYS = Object.keys(CHANGE_COLUMNS) as (keyof IncidentChanges)[];
 
@@ -49,7 +55,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 
 	async create(tenantId: TenantId, incident: Omit<Incident, "tenantId">): Promise<Incident> {
 		const { rows } = await this.pool.query<IncidentRow>(
-			`INSERT INTO incidents (${COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${COLUMNS}`,
+			`INSERT INTO incidents (${COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING ${COLUMNS}`,
 			[
 				incident.id,
 				tenantId,
@@ -60,6 +66,8 @@ export class PostgresIncidentRepository implements IncidentRepository {
 				incident.createdBy,
 				incident.acknowledgedAt,
 				incident.acknowledgedBy,
+				incident.resolvedAt,
+				incident.resolvedBy,
 			],
 		);
 		return toIncident(rows[0] as IncidentRow);

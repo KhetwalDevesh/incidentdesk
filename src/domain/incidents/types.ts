@@ -13,12 +13,14 @@ export type Incident = {
 	createdBy: string;
 	acknowledgedAt: Date | null;
 	acknowledgedBy: string | null;
+	resolvedAt: Date | null;
+	resolvedBy: string | null;
 };
 
 export type IncidentPage = { items: Incident[]; total: number };
 
 export type IncidentChanges = Partial<
-	Pick<Incident, "status" | "acknowledgedAt" | "acknowledgedBy">
+	Pick<Incident, "status" | "acknowledgedAt" | "acknowledgedBy" | "resolvedAt" | "resolvedBy">
 >;
 
 // Every method takes tenantId first, so a cross-tenant read cannot be written by accident.
@@ -41,4 +43,5 @@ export interface IncidentService {
 	get(principal: Principal, id: IncidentId): Promise<Result<Incident>>;
 	list(principal: Principal, page: PageQuery): Promise<Result<IncidentPage>>;
 	acknowledge(principal: Principal, id: IncidentId): Promise<Result<Incident>>;
+	resolve(principal: Principal, id: IncidentId): Promise<Result<Incident>>;
 }

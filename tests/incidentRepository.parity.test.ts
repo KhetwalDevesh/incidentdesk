@@ -25,6 +25,8 @@ const newIncident = (createdAt: Date, title = "Checkout is down"): Omit<Incident
 	createdBy: "user-1",
 	acknowledgedAt: null,
 	acknowledgedBy: null,
+	resolvedAt: null,
+	resolvedBy: null,
 });
 
 const pool = new Pool({ connectionString: TEST_DATABASE_URL });
@@ -117,6 +119,21 @@ describe.each([
 			acknowledgedAt: at,
 			acknowledgedBy: "user-2",
 		});
+		expect(await repository.findById(acme, incident.id)).toEqual(updated);
+	});
+
+	it("round-trips the resolution fields", async () => {
+		const incident = newIncident(new Date());
+		await repository.create(acme, incident);
+		const at = new Date("2026-01-04T00:00:00Z");
+
+		const updated = await repository.update(acme, incident.id, "open", {
+			status: "resolved",
+			resolvedAt: at,
+			resolvedBy: "user-3",
+		});
+
+		expect(updated).toMatchObject({ status: "resolved", resolvedAt: at, resolvedBy: "user-3" });
 		expect(await repository.findById(acme, incident.id)).toEqual(updated);
 	});
 
