@@ -36,15 +36,23 @@ Read one request end to end, in this order:
 
 Then read `docs/architecture.md`.
 
-**Try it:** copy `.env.example` to `.env`, run `pnpm dev`, then in another terminal:
+**Try it:** copy `.env.example` to `.env`, run `pnpm db:up`, `pnpm db:migrate` and `pnpm dev`, then in another terminal:
 
 ```bash
+signup() {
+  curl -s -X POST localhost:3000/v1/auth/signup -H 'Content-Type: application/json' \
+    -d "{\"tenantName\":\"$1\",\"email\":\"$2\",\"password\":\"correct horse battery\"}" |
+    sed -E 's/.*"accessToken":"([^"]+)".*/\1/'
+}
+ACME=$(signup Acme ada@example.com)
+GLOBEX=$(signup Globex linus@example.com)
+
 curl -i -X POST localhost:3000/v1/incidents \
-  -H 'Authorization: Bearer dev-token-acme' \
+  -H "Authorization: Bearer $ACME" \
   -H 'Content-Type: application/json' \
   -d '{"title":"Checkout is down","severity":"sev1"}'
 
-curl -i localhost:3000/v1/incidents -H 'Authorization: Bearer dev-token-globex'
+curl -i localhost:3000/v1/incidents -H "Authorization: Bearer $GLOBEX"
 ```
 
 The second tenant sees no incidents.
