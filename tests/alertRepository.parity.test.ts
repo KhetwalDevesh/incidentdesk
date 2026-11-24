@@ -1,0 +1,398 @@
+import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createAesGcmSecretBox } from "../src/adapters/aesGcmSecretBox";
+import type { IncidentId } from "../src/contract/incidents";
+import {
+	type Alert,
+	type AlertQueue,
+	type AlertRepository,
+	type AlertSource,
+	type AlertSourceLookup,
+	type AlertSourceRepository,
+	alertSourceSecretContext,
+} from "../src/domain/alerts/types";
+import type { Incident, IncidentRepository } from "../src/domain/incidents/types";
+import type { Principal, TenantId } from "../src/domain/shared/identity";
+import { InMemoryAlertRepository } from "../src/repository/alerts/inMemoryAlertRepository";
+import { InMemoryAlertSourceRepository } from "../src/repository/alerts/inMemoryAlertSourceRepository";
+import { PostgresAlertRepository } from "../src/repository/alerts/postgresAlertRepository";
+import { PostgresAlertSourceRepository } from "../src/repository/alerts/postgresAlertSourceRepository";
+import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
+import { PostgresIncidentRepository } from "../src/repository/incidents/postgresIncidentRepository";
+import { runMigrations } from "../src/repository/postgres/migrate";
+import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
+import { createAlertSourceService } from "../src/services/alerts/alertSourceService";
+
+const TEST_DATABASE_URL =
+	process.env.TEST_DATABASE_URL ??
+	"postgres://incidentdesk:incidentdesk@localhost:54329/incidentdesk_test";
+
+// Its own schema, so other parity tests' TRUNCATEs, which run in parallel, never touch these rows.
+const SCHEMA = "alert_parity";
+const admin = new Pool({ connectionString: TEST_DATABASE_URL });
+const pool = new Pool({ connectionString: TEST_DATABASE_URL, options: `-c search_path=${SCHEMA}` });
+
+beforeAll(async () => {
+	try {
+		await admin.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+		await admin.query(`CREATE SCHEMA ${SCHEMA}`);
+		await runMigrations(pool);
+	} catch (error) {
+		throw new Error(
+			`Cannot reach the test database at ${new URL(TEST_DATABASE_URL).host}. Run: pnpm db:up`,
+			{ cause: error },
+		);
+	}
+});
+
+// claimDue serves every tenant, so alerts left by an earlier test would be claimed by a later one.
+// This schema belongs to this file alone, so emptying it is safe.
+beforeEach(async () => {
+	await pool.query("TRUNCATE alerts");
+});
+
+afterAll(async () => {
+	await admin.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+	await Promise.all([admin.end(), pool.end()]);
+});
+
+// Real tenants, because alert_sources references tenants.
+const newTenant = async (): Promise<TenantId> => {
+	const id = randomUUID() as TenantId;
+	await pool.query("INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, now())", [
+		id,
+		"Acme",
+	]);
+	return id;
+};
+
+const newSource = (
+	name: string,
+	createdAt = new Date("2026-01-01T00:00:00.123Z"),
+): Omit<AlertSource, "tenantId"> => ({
+	id: randomUUID(),
+	name,
+	secretCiphertext: Buffer.from([1, 2, 3, 4]),
+	secretHint: "WXYZ",
+	createdAt,
+});
+
+type Stores = {
+	sources: AlertSourceRepository & AlertSourceLookup;
+	alerts: AlertRepository & AlertQueue;
+	incidents: IncidentRepository;
+};
+
+describe.each([
+	[
+		"in-memory",
+		(): Stores => {
+			const incidents = new InMemoryIncidentRepository();
+			return {
+				sources: new InMemoryAlertSourceRepository(),
+				alerts: new InMemoryAlertRepository(incidents),
+				incidents,
+			};
+		},
+	],
+	[
+		"postgres",
+		(): Stores => ({
+			sources: new PostgresAlertSourceRepository(pool),
+			alerts: new PostgresAlertRepository(pool),
+			incidents: new PostgresIncidentRepository(pool),
+		}),
+	],
+] as const)("alert repositories parity: %s", (_name, make) => {
+	let stores: Stores;
+	let acme: TenantId;
+	let globex: TenantId;
+	let source: AlertSource;
+	let clock: number;
+
+	beforeEach(async () => {
+		stores = make();
+		acme = await newTenant();
+		globex = await newTenant();
+		source = (await stores.sources.create(acme, newSource("prometheus"))) as AlertSource;
+		clock = Date.parse("2030-01-01T00:00:00Z");
+	});
+
+	const at = (offsetMs = 0) => new Date(clock + offsetMs);
+
+	const newAlert = (overrides: Partial<Alert> = {}): Omit<Alert, "tenantId"> => ({
+		id: randomUUID(),
+		sourceId: source.id,
+		dedupKey: `key-${randomUUID()}`,
+		status: "firing",
+		title: "DB CPU above 90%",
+		severity: "sev2",
+		details: { host: "db-1", cpu: 97, paged: true },
+		state: "pending",
+		attempts: 0,
+		nextAttemptAt: at(),
+		lastError: null,
+		incidentId: null,
+		receivedAt: at(),
+		processedAt: null,
+		...overrides,
+	});
+
+	const claimAll = () => stores.alerts.claimDue(at(1), 100, at(60_000));
+
+	const candidate = (alert: Omit<Alert, "tenantId">): Omit<Incident, "tenantId"> => ({
+		id: randomUUID() as IncidentId,
+		title: alert.title,
+		severity: alert.severity,
+		status: "open",
+		createdAt: at(),
+		createdBy: `alert_source:${alert.sourceId}`,
+		acknowledgedAt: null,
+		acknowledgedBy: null,
+		resolvedAt: null,
+		resolvedBy: null,
+		alertSourceId: alert.sourceId,
+		dedupKey: alert.dedupKey,
+		alertCount: 1,
+		lastAlertAt: alert.receivedAt,
+	});
+
+	describe("sources", () => {
+		it("round-trips every field, by tenant and by id", async () => {
+			const input = newSource("grafana");
+
+			const created = await stores.sources.create(acme, input);
+
+			expect(created).toEqual({ ...input, tenantId: acme });
+			expect(await stores.sources.findForIngest(input.id)).toEqual(created);
+			expect(await stores.sources.findForIngest(randomUUID())).toBeNull();
+		});
+
+		it("refuses a duplicate name in the same tenant, but allows it in another", async () => {
+			expect(await stores.sources.create(acme, newSource("prometheus"))).toBeNull();
+			expect(await stores.sources.create(globex, newSource("prometheus"))).not.toBeNull();
+		});
+
+		it("lists only the tenant's sources, oldest first, with a total", async () => {
+			await stores.sources.create(acme, newSource("a", new Date("2025-12-31T00:00:00Z")));
+			await stores.sources.create(globex, newSource("other"));
+
+			const page = await stores.sources.list(acme, { limit: 1, offset: 0 });
+
+			expect(page.total).toBe(2);
+			expect(page.items.map((item) => item.name)).toEqual(["a"]);
+		});
+	});
+
+	describe("alerts", () => {
+		it("round-trips every field and lists only the tenant's alerts, newest first", async () => {
+			const older = newAlert();
+			const newer = newAlert({ receivedAt: at(1000) });
+			const created = await stores.alerts.enqueue(acme, older);
+			await stores.alerts.enqueue(acme, newer);
+
+			expect(created).toEqual({ ...older, tenantId: acme });
+			const page = await stores.alerts.list(acme, { limit: 10, offset: 0 });
+			expect(page.items.map((item) => item.id)).toEqual([newer.id, older.id]);
+			expect((await stores.alerts.list(globex, { limit: 10, offset: 0 })).total).toBe(0);
+		});
+
+		it("filters the list by state", async () => {
+			const pending = newAlert();
+			await stores.alerts.enqueue(acme, pending);
+
+			expect(
+				(await stores.alerts.list(acme, { limit: 10, offset: 0, state: "pending" })).total,
+			).toBe(1);
+			expect(
+				(await stores.alerts.list(acme, { limit: 10, offset: 0, state: "failed" })).total,
+			).toBe(0);
+		});
+
+		it("claims due alerts oldest first, increments attempts and leases them", async () => {
+			const second = newAlert({ receivedAt: at(500) });
+			const first = newAlert();
+			const notDue = newAlert({ nextAttemptAt: at(10_000) });
+			for (const alert of [second, first, notDue]) await stores.alerts.enqueue(acme, alert);
+
+			const claimed = await claimAll();
+
+			expect(claimed.map((alert) => alert.id)).toEqual([first.id, second.id]);
+			expect(claimed[0]).toMatchObject({ attempts: 1, nextAttemptAt: at(60_000) });
+			expect(await claimAll()).toEqual([]);
+		});
+
+		it("opens an incident for a new key, then attaches the next alert to it", async () => {
+			const first = newAlert();
+			const second = newAlert({ dedupKey: first.dedupKey, receivedAt: at(2000) });
+			await stores.alerts.enqueue(acme, first);
+			await stores.alerts.enqueue(acme, second);
+
+			const opened = await stores.alerts.complete(acme, first.id, candidate(first), at(5));
+			const attached = await stores.alerts.complete(acme, second.id, candidate(second), at(6));
+
+			expect(attached?.incidentId).toBe(opened?.incidentId);
+			const incident = await stores.incidents.findById(acme, opened?.incidentId as IncidentId);
+			expect(incident).toMatchObject({
+				alertSourceId: source.id,
+				dedupKey: first.dedupKey,
+				alertCount: 2,
+				lastAlertAt: at(2000),
+			});
+			const page = await stores.alerts.list(acme, { limit: 10, offset: 0 });
+			expect(page.items.every((alert) => alert.state === "processed")).toBe(true);
+			expect(page.items.map((alert) => alert.processedAt)).toEqual([at(6), at(5)]);
+		});
+
+		it("never moves lastAlertAt backwards for a late, older alert", async () => {
+			const newer = newAlert({ receivedAt: at(5000) });
+			const older = newAlert({ dedupKey: newer.dedupKey });
+			await stores.alerts.enqueue(acme, newer);
+			await stores.alerts.enqueue(acme, older);
+
+			const { incidentId } =
+				(await stores.alerts.complete(acme, newer.id, candidate(newer), at())) ?? {};
+			await stores.alerts.complete(acme, older.id, candidate(older), at());
+
+			const incident = await stores.incidents.findById(acme, incidentId as IncidentId);
+			expect(incident?.lastAlertAt).toEqual(at(5000));
+		});
+
+		it("attaches without a candidate only when an unresolved incident exists", async () => {
+			const lonely = newAlert({ status: "resolved" });
+			await stores.alerts.enqueue(acme, lonely);
+
+			expect(await stores.alerts.complete(acme, lonely.id, null, at())).toEqual({
+				incidentId: null,
+			});
+		});
+
+		it("opens a new incident once the previous one for the key is resolved", async () => {
+			const first = newAlert();
+			const second = newAlert({ dedupKey: first.dedupKey });
+			await stores.alerts.enqueue(acme, first);
+			await stores.alerts.enqueue(acme, second);
+			const opened = await stores.alerts.complete(acme, first.id, candidate(first), at());
+			await stores.incidents.update(acme, opened?.incidentId as IncidentId, "open", {
+				status: "resolved",
+			});
+
+			const reopened = await stores.alerts.complete(acme, second.id, candidate(second), at());
+
+			expect(reopened?.incidentId).not.toBe(opened?.incidentId);
+		});
+
+		it("completes an alert only once", async () => {
+			const alert = newAlert();
+			await stores.alerts.enqueue(acme, alert);
+
+			const first = await stores.alerts.complete(acme, alert.id, candidate(alert), at());
+			const second = await stores.alerts.complete(acme, alert.id, candidate(alert), at());
+
+			expect(first?.incidentId).not.toBeNull();
+			expect(second).toBeNull();
+			const incident = await stores.incidents.findById(acme, first?.incidentId as IncidentId);
+			expect(incident?.alertCount).toBe(1);
+		});
+
+		it("ignores another tenant's id in complete and fail", async () => {
+			const alert = newAlert();
+			await stores.alerts.enqueue(acme, alert);
+
+			expect(await stores.alerts.complete(globex, alert.id, candidate(alert), at())).toBeNull();
+			await stores.alerts.fail(globex, alert.id, "boom", null, at());
+
+			expect((await stores.alerts.list(acme, { limit: 10, offset: 0 })).items[0]).toMatchObject({
+				state: "pending",
+				lastError: null,
+			});
+		});
+
+		it("records a retry, then a final failure", async () => {
+			const alert = newAlert();
+			await stores.alerts.enqueue(acme, alert);
+
+			await stores.alerts.fail(acme, alert.id, "first", at(5000), at());
+			const [retrying] = (await stores.alerts.list(acme, { limit: 10, offset: 0 })).items;
+			await stores.alerts.fail(acme, alert.id, "last", null, at(9000));
+			const [failed] = (await stores.alerts.list(acme, { limit: 10, offset: 0 })).items;
+
+			expect(retrying).toMatchObject({
+				state: "pending",
+				lastError: "first",
+				nextAttemptAt: at(5000),
+				processedAt: null,
+			});
+			expect(failed).toMatchObject({ state: "failed", lastError: "last", processedAt: at(9000) });
+		});
+	});
+});
+
+describe("alert grouping races in postgres", () => {
+	it("gives concurrent workers that see one new key a single incident", async () => {
+		const tenantId = await newTenant();
+		const sources = new PostgresAlertSourceRepository(pool);
+		const alerts = new PostgresAlertRepository(pool);
+		const source = (await sources.create(tenantId, newSource("prometheus"))) as AlertSource;
+		const now = new Date("2030-01-01T00:00:00Z");
+		const dedupKey = `race-${randomUUID()}`;
+		const count = 8;
+		for (let i = 0; i < count; i++) {
+			await alerts.enqueue(tenantId, {
+				id: randomUUID(),
+				sourceId: source.id,
+				dedupKey,
+				status: "firing",
+				title: "DB CPU above 90%",
+				severity: "sev2",
+				details: {},
+				state: "pending",
+				attempts: 0,
+				nextAttemptAt: now,
+				lastError: null,
+				incidentId: null,
+				receivedAt: now,
+				processedAt: null,
+			});
+		}
+		const worker = () =>
+			createAlertProcessor({ queue: alerts, alerts, now: () => now, batchSize: 1 });
+
+		const claimed = await Promise.all(Array.from({ length: count }, () => worker().processBatch()));
+
+		expect(claimed.reduce((sum, n) => sum + n, 0)).toBe(count);
+		const { rows } = await pool.query<{ alert_count: number }>(
+			"SELECT alert_count FROM incidents WHERE tenant_id = $1 AND dedup_key = $2",
+			[tenantId, dedupKey],
+		);
+		expect(rows).toEqual([{ alert_count: count }]);
+	});
+});
+
+describe("alert source storage in postgres", () => {
+	it("stores only ciphertext, which opens only under its own tenant and source", async () => {
+		const box = createAesGcmSecretBox(Buffer.alloc(32, 5).toString("base64"));
+		const tenantId = await newTenant();
+		const principal: Principal = { tenantId, userId: "user-1", role: "admin" };
+		const service = createAlertSourceService(new PostgresAlertSourceRepository(pool), box);
+
+		const created = await service.create(principal, { name: "prometheus" });
+		if (!created.ok) throw new Error("create failed");
+		const { source, secret } = created.value;
+
+		const { rows } = await pool.query<{ secret_ciphertext: Buffer }>(
+			"SELECT secret_ciphertext FROM alert_sources WHERE tenant_id = $1",
+			[tenantId],
+		);
+		const raw = rows[0]?.secret_ciphertext ?? Buffer.alloc(0);
+
+		expect(raw.includes(secret)).toBe(false);
+		expect(box.open(raw, alertSourceSecretContext(tenantId, source.id))).toBe(secret);
+		expect(() =>
+			box.open(raw, alertSourceSecretContext(randomUUID() as TenantId, source.id)),
+		).toThrow();
+		// A notification channel's context cannot open it either.
+		expect(() => box.open(raw, `notification_channel:${tenantId}:${source.id}`)).toThrow();
+	});
+});

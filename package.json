@@ -9,6 +9,8 @@
 	"scripts": {
 		"dev": "tsx watch --env-file=.env src/server.ts",
 		"start": "tsx --env-file=.env src/server.ts",
+		"worker": "tsx --env-file=.env src/worker.ts",
+		"dev:worker": "tsx watch --env-file=.env src/worker.ts",
 		"dev:receiver": "tsx scripts/dev-receiver.ts",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",

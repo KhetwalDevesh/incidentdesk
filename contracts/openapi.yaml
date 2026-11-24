@@ -43,6 +43,18 @@ components:
             - string
             - "null"
           format: date-time
+        origin:
+          type: string
+          enum:
+            - manual
+            - alert
+        alertCount:
+          type: integer
+        lastAlertAt:
+          type:
+            - string
+            - "null"
+          format: date-time
       required:
         - id
         - title
@@ -51,6 +63,9 @@ components:
         - createdAt
         - acknowledgedAt
         - resolvedAt
+        - origin
+        - alertCount
+        - lastAlertAt
       additionalProperties: false
     Problem:
       type: object
@@ -70,6 +85,7 @@ components:
             - FORBIDDEN
             - NOT_FOUND
             - CONFLICT
+            - PAYLOAD_TOO_LARGE
             - VALIDATION_FAILED
             - INTERNAL
         detail:
@@ -384,6 +400,207 @@ components:
       required:
         - name
         - webhookUrl
+      additionalProperties: false
+    AlertSourceList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AlertSource"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    AlertSource:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        secretHint:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - secretHint
+        - createdAt
+      additionalProperties: false
+      description: The signing secret is never returned. secretHint shows its last 4
+        characters.
+    CreatedAlertSource:
+      allOf:
+        - $ref: "#/components/schemas/AlertSource"
+        - type: object
+          properties:
+            secret:
+              type: string
+          required:
+            - secret
+          additionalProperties: false
+      description: "Returned once, on create. Store the secret now: it is never shown
+        again."
+    CreateAlertSourceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+      required:
+        - name
+      additionalProperties: false
+    AlertList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alert"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        state:
+          type: string
+          enum:
+            - pending
+            - processed
+            - failed
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    Alert:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        dedupKey:
+          type: string
+        status:
+          type: string
+          enum:
+            - firing
+            - resolved
+        title:
+          type: string
+        severity:
+          type: string
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+        details:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: string
+                maxLength: 1000
+              - type: number
+              - type: boolean
+        state:
+          type: string
+          enum:
+            - pending
+            - processed
+            - failed
+        attempts:
+          type: integer
+        incidentId:
+          type:
+            - string
+            - "null"
+          format: uuid
+        receivedAt:
+          type: string
+          format: date-time
+        processedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - id
+        - sourceId
+        - dedupKey
+        - status
+        - title
+        - severity
+        - details
+        - state
+        - attempts
+        - incidentId
+        - receivedAt
+        - processedAt
+      additionalProperties: false
+    AlertAccepted:
+      type: object
+      properties:
+        alertId:
+          type: string
+          format: uuid
+      required:
+        - alertId
+      additionalProperties: false
+    AlertPayload:
+      type: object
+      properties:
+        dedupKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+        title:
+          type: string
+          minLength: 3
+          maxLength: 200
+        severity:
+          type: string
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+        status:
+          type: string
+          enum:
+            - firing
+            - resolved
+          default: firing
+        details:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: string
+                maxLength: 1000
+              - type: number
+              - type: boolean
+      required:
+        - dedupKey
+        - title
+        - severity
       additionalProperties: false
   parameters: {}
 paths:
@@ -861,6 +1078,204 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/alert-sources:
+    get:
+      summary: List the caller's tenant's alert sources
+      security: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of alert sources
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertSourceList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can list alert sources
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      summary: Add a monitoring tool that may post alerts to the caller's tenant
+      security: *a1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAlertSourceRequest"
+      responses:
+        "201":
+          description: Source added. The secret is shown this once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedAlertSource"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can add alert sources
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The tenant already has a source with this name
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/alerts:
+    get:
+      summary: List the caller's tenant's alerts, newest first
+      security: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+        - schema:
+            type: string
+            enum:
+              - pending
+              - processed
+              - failed
+          required: false
+          name: state
+          in: query
+      responses:
+        "200":
+          description: A page of alerts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can list alerts
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /webhooks/alerts/{sourceId}:
+    post:
+      summary: Accept a signed alert from a monitoring tool
+      description: The signature is checked before the body is parsed. The alert is
+        queued, and a worker groups it into an incident.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: sourceId
+          in: path
+        - schema:
+            type: string
+            description: Unix time in seconds
+          required: true
+          description: Unix time in seconds
+          name: X-IncidentDesk-Timestamp
+          in: header
+        - schema:
+            type: string
+            description: v1= followed by the hex HMAC-SHA256 of `{timestamp}.{raw body}`
+          required: true
+          description: v1= followed by the hex HMAC-SHA256 of `{timestamp}.{raw body}`
+          name: X-IncidentDesk-Signature
+          in: header
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertPayload"
+      responses:
+        "202":
+          description: Alert queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertAccepted"
+        "401":
+          description: Unknown source, stale timestamp, or missing or invalid signature
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: Body is larger than 64 KB
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Body failed validation
           content:
             application/problem+json:
               schema:

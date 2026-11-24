@@ -3,6 +3,7 @@ import "./common";
 
 export const INCIDENT_SEVERITIES = ["sev1", "sev2", "sev3", "sev4"] as const;
 export const INCIDENT_STATUSES = ["open", "acknowledged", "resolved"] as const;
+export const INCIDENT_ORIGINS = ["manual", "alert"] as const;
 
 export type IncidentSeverity = (typeof INCIDENT_SEVERITIES)[number];
 
@@ -28,6 +29,10 @@ export const IncidentSchema = z
 		createdAt: z.iso.datetime(),
 		acknowledgedAt: z.iso.datetime().nullable(),
 		resolvedAt: z.iso.datetime().nullable(),
+		// "alert" when an alert source opened it. See docs/features/alert-ingestion.md.
+		origin: z.enum(INCIDENT_ORIGINS),
+		alertCount: z.number().int(),
+		lastAlertAt: z.iso.datetime().nullable(),
 	})
 	.openapi("Incident");
 

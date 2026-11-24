@@ -1,12 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { sign } from "hono/jwt";
 import { beforeEach, describe, expect, it } from "vitest";
+import { AlertListSchema, AlertSourceListSchema } from "../src/contract/alerts";
 import { AccessTokenSchema } from "../src/contract/auth";
 import { ProblemSchema } from "../src/contract/common";
 import { IncidentListSchema, IncidentSchema } from "../src/contract/incidents";
 import { MemberInviteSchema, MemberListSchema } from "../src/contract/members";
 import { NotificationChannelListSchema } from "../src/contract/notificationChannels";
-import { authed, buildTestApp, post, signup, TEST_JWT_SECRET } from "./helpers";
+import {
+	addAlertSource,
+	authed,
+	buildTestApp,
+	buildTestSystem,
+	post,
+	signedAlert,
+	signup,
+	TEST_JWT_SECRET,
+} from "./helpers";
 
 const PASSWORD = "correct horse battery";
 
@@ -330,6 +340,109 @@ describe("notification channels", () => {
 		}
 		const list = await app.request(PATH, authed("acme-admin"));
 		expect(NotificationChannelListSchema.parse(await list.json()).total).toBe(0);
+	});
+});
+
+describe("alert ingestion", () => {
+	const alert = { dedupKey: "db-cpu-high", title: "DB CPU above 90%", severity: "sev1" };
+	let system: ReturnType<typeof buildTestSystem>;
+	let globexAdmin: string;
+
+	beforeEach(async () => {
+		system = buildTestSystem();
+		globexAdmin = await signup(system.app, "admin@globex.example", "Globex");
+	});
+
+	const incidentsOf = async (token: string) =>
+		IncidentListSchema.parse(
+			await (await system.app.request("/v1/incidents", authed(token))).json(),
+		);
+
+	it("never returns a source secret after create, nor its ciphertext", async () => {
+		const { secret } = await addAlertSource(system.app, "acme-admin");
+
+		const listed = await system.app.request("/v1/alert-sources", authed("acme-admin"));
+
+		const body = await listed.text();
+		expect(body).not.toContain(secret);
+		expect(body).not.toContain("iphertext");
+	});
+
+	it("keeps each tenant's sources and alerts separate", async () => {
+		const { sourceId, secret } = await addAlertSource(system.app, "acme-admin");
+		await system.app.request(`/webhooks/alerts/${sourceId}`, signedAlert(secret, alert));
+
+		const sources = await system.app.request("/v1/alert-sources", authed(globexAdmin));
+		const alerts = await system.app.request("/v1/alerts", authed(globexAdmin));
+
+		expect(AlertSourceListSchema.parse(await sources.json()).total).toBe(0);
+		expect(AlertListSchema.parse(await alerts.json()).total).toBe(0);
+		const sameName = await system.app.request(
+			"/v1/alert-sources",
+			authed(globexAdmin, { name: "prometheus" }),
+		);
+		expect(sameName.status).toBe(201);
+	});
+
+	it("files an alert under its source's tenant only, even for a shared dedup key", async () => {
+		const acme = await addAlertSource(system.app, "acme-admin");
+		const globex = await addAlertSource(system.app, globexAdmin);
+		await system.app.request(`/webhooks/alerts/${acme.sourceId}`, signedAlert(acme.secret, alert));
+		await system.app.request(
+			`/webhooks/alerts/${globex.sourceId}`,
+			signedAlert(globex.secret, alert),
+		);
+
+		await system.processor.processBatch();
+
+		expect((await incidentsOf("acme-admin")).items).toMatchObject([{ alertCount: 1 }]);
+		expect((await incidentsOf(globexAdmin)).items).toMatchObject([{ alertCount: 1 }]);
+	});
+
+	it("refuses one tenant's secret on another tenant's source", async () => {
+		const acme = await addAlertSource(system.app, "acme-admin");
+		const globex = await addAlertSource(system.app, globexAdmin);
+
+		const res = await system.app.request(
+			`/webhooks/alerts/${globex.sourceId}`,
+			signedAlert(acme.secret, alert),
+		);
+
+		expect(res.status).toBe(401);
+		expect(await system.processor.processBatch()).toBe(0);
+	});
+
+	it("rejects a tenantId in the alert body, and files nothing", async () => {
+		const { sourceId, secret } = await addAlertSource(system.app, "acme-admin");
+
+		const res = await system.app.request(
+			`/webhooks/alerts/${sourceId}`,
+			signedAlert(secret, { ...alert, tenantId: "tenant-globex" }),
+		);
+
+		expect(res.status).toBe(422);
+		expect(await system.processor.processBatch()).toBe(0);
+	});
+
+	it("ignores a bearer token on the webhook: only the signature counts", async () => {
+		const { sourceId } = await addAlertSource(system.app, "acme-admin");
+
+		const res = await system.app.request(
+			`/webhooks/alerts/${sourceId}`,
+			authed("acme-admin", alert),
+		);
+
+		expect(res.status).toBe(401);
+	});
+
+	it("refuses viewers and responders on sources and alerts", async () => {
+		for (const token of ["acme-viewer", "acme-responder"]) {
+			const created = await system.app.request("/v1/alert-sources", authed(token, { name: "x" }));
+			const listed = await system.app.request("/v1/alerts", authed(token));
+			expect([created.status, listed.status]).toEqual([403, 403]);
+		}
+		const list = await system.app.request("/v1/alert-sources", authed("acme-admin"));
+		expect(AlertSourceListSchema.parse(await list.json()).total).toBe(0);
 	});
 });
 

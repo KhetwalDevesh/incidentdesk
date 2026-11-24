@@ -10,4 +10,7 @@ export const toIncidentResponse = (incident: Incident): IncidentResponse => ({
 	createdAt: incident.createdAt.toISOString(),
 	acknowledgedAt: incident.acknowledgedAt?.toISOString() ?? null,
 	resolvedAt: incident.resolvedAt?.toISOString() ?? null,
+	origin: incident.alertSourceId ? "alert" : "manual",
+	alertCount: incident.alertCount,
+	lastAlertAt: incident.lastAlertAt?.toISOString() ?? null,
 });
