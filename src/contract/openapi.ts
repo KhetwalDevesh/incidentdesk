@@ -1,6 +1,16 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from "@asteasolutions/zod-to-openapi";
 import { z } from "zod";
 import {
+	AlertAcceptedSchema,
+	AlertListQuerySchema,
+	AlertListSchema,
+	AlertPayloadSchema,
+	AlertSourceListSchema,
+	AlertWebhookHeadersSchema,
+	CreateAlertSourceRequestSchema,
+	CreatedAlertSourceSchema,
+} from "./alerts";
+import {
 	AccessTokenSchema,
 	LoginRequestSchema,
 	SetupPasswordRequestSchema,
@@ -217,6 +227,71 @@ registry.registerPath({
 		403: problem("Only admins can add notification channels"),
 		409: problem("The tenant already has a channel with this name"),
 		422: problem("Request body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/alert-sources",
+	summary: "List the caller's tenant's alert sources",
+	security,
+	request: { query: PageQuerySchema },
+	responses: {
+		200: json(AlertSourceListSchema, "A page of alert sources"),
+		...authErrors,
+		403: problem("Only admins can list alert sources"),
+		422: problem("Query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/alert-sources",
+	summary: "Add a monitoring tool that may post alerts to the caller's tenant",
+	security,
+	request: {
+		body: { content: { "application/json": { schema: CreateAlertSourceRequestSchema } } },
+	},
+	responses: {
+		201: json(CreatedAlertSourceSchema, "Source added. The secret is shown this once"),
+		...authErrors,
+		403: problem("Only admins can add alert sources"),
+		409: problem("The tenant already has a source with this name"),
+		422: problem("Request body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/alerts",
+	summary: "List the caller's tenant's alerts, newest first",
+	security,
+	request: { query: AlertListQuerySchema },
+	responses: {
+		200: json(AlertListSchema, "A page of alerts"),
+		...authErrors,
+		403: problem("Only admins can list alerts"),
+		422: problem("Query failed validation"),
+	},
+});
+
+// Public: authenticated by the source's HMAC signature, not a bearer token.
+registry.registerPath({
+	method: "post",
+	path: "/webhooks/alerts/{sourceId}",
+	summary: "Accept a signed alert from a monitoring tool",
+	description:
+		"The signature is checked before the body is parsed. The alert is queued, and a worker groups it into an incident.",
+	request: {
+		params: z.object({ sourceId: z.uuid() }),
+		headers: AlertWebhookHeadersSchema,
+		body: { content: { "application/json": { schema: AlertPayloadSchema } } },
+	},
+	responses: {
+		202: json(AlertAcceptedSchema, "Alert queued"),
+		401: problem("Unknown source, stale timestamp, or missing or invalid signature"),
+		413: problem("Body is larger than 64 KB"),
+		422: problem("Body failed validation"),
 	},
 });
 

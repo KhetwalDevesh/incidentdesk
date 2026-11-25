@@ -23,6 +23,10 @@ export const createIncidentService = (
 			acknowledgedBy: null,
 			resolvedAt: null,
 			resolvedBy: null,
+			alertSourceId: null,
+			dedupKey: null,
+			alertCount: 0,
+			lastAlertAt: null,
 		});
 		return ok(incident);
 	},

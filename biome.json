@@ -14,7 +14,7 @@
 	},
 	"overrides": [
 		{
-			"includes": ["scripts/**", "src/server.ts"],
+			"includes": ["scripts/**", "src/server.ts", "src/worker.ts"],
 			"linter": { "rules": { "suspicious": { "noConsole": "off" } } }
 		}
 	]

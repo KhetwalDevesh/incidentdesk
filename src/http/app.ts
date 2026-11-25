@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
+import type { AlertIngestService, AlertService, AlertSourceService } from "../domain/alerts/types";
 import type { AuthService, MemberService } from "../domain/auth/types";
 import type { IncidentService } from "../domain/incidents/types";
 import type { NotificationChannelService } from "../domain/notifications/types";
+import { alertSourceRoutes } from "../routes/alertSources";
+import { alertRoutes } from "../routes/alerts";
+import { alertWebhookRoutes } from "../routes/alertWebhooks";
 import { authRoutes } from "../routes/auth";
 import { healthRoutes } from "../routes/health";
 import { incidentRoutes } from "../routes/incidents";
@@ -21,6 +25,9 @@ export type AppDeps = {
 	incidentService: IncidentService;
 	memberService: MemberService;
 	notificationChannelService: NotificationChannelService;
+	alertSourceService: AlertSourceService;
+	alertService: AlertService;
+	alertIngestService: AlertIngestService;
 };
 
 export const createApp = ({
@@ -29,6 +36,9 @@ export const createApp = ({
 	incidentService,
 	memberService,
 	notificationChannelService,
+	alertSourceService,
+	alertService,
+	alertIngestService,
 }: AppDeps) => {
 	const app = new Hono<AppEnv>();
 
@@ -50,10 +60,14 @@ export const createApp = ({
 	// Registered before requireAuth, so only these token-issuing routes are public.
 	// Every /v1 route registered after it requires a token.
 	app.route("/v1/auth", authRoutes(authService));
+	// Outside /v1 and before requireAuth: monitoring tools sign requests instead of holding a token.
+	app.route("/webhooks/alerts", alertWebhookRoutes(alertIngestService));
 	app.use("/v1/*", requireAuth(authenticate));
 	app.route("/v1/incidents", incidentRoutes(incidentService));
 	app.route("/v1/members", memberRoutes(memberService));
 	app.route("/v1/notification-channels", notificationChannelRoutes(notificationChannelService));
+	app.route("/v1/alert-sources", alertSourceRoutes(alertSourceService));
+	app.route("/v1/alerts", alertRoutes(alertService));
 
 	return app;
 };

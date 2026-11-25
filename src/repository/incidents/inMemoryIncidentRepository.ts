@@ -28,6 +28,26 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		return { items: owned.slice(offset, offset + limit), total: owned.length };
 	}
 
+	// Used by InMemoryAlertRepository, the twin of the Postgres grouping upsert. Synchronous,
+	// so a caller's lookup and write cannot interleave with another caller.
+	findUnresolvedGroupSync(tenantId: TenantId, alertSourceId: string, dedupKey: string) {
+		for (const incident of this.incidents.values()) {
+			if (
+				incident.tenantId === tenantId &&
+				incident.alertSourceId === alertSourceId &&
+				incident.dedupKey === dedupKey &&
+				incident.status !== "resolved"
+			) {
+				return incident;
+			}
+		}
+		return null;
+	}
+
+	putSync(incident: Incident) {
+		this.incidents.set(incident.id, incident);
+	}
+
 	// No await between the check and the write, so the compare-and-set is atomic.
 	async update(
 		tenantId: TenantId,

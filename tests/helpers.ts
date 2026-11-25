@@ -1,12 +1,27 @@
 import { createAesGcmSecretBox } from "../src/adapters/aesGcmSecretBox";
 import { createArgon2PasswordHasher } from "../src/adapters/argon2PasswordHasher";
+import {
+	createHmacAlertSignatureVerifier,
+	signAlertBody,
+} from "../src/adapters/hmacAlertSignature";
 import { createJwtTokenService } from "../src/adapters/jwtTokenService";
+import {
+	ALERT_SIGNATURE_HEADER,
+	ALERT_TIMESTAMP_HEADER,
+	CreatedAlertSourceSchema,
+} from "../src/contract/alerts";
 import { AccessTokenSchema } from "../src/contract/auth";
 import type { Principal, TenantId } from "../src/domain/shared/identity";
 import { createApp } from "../src/http/app";
 import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAccountRepository";
+import { InMemoryAlertRepository } from "../src/repository/alerts/inMemoryAlertRepository";
+import { InMemoryAlertSourceRepository } from "../src/repository/alerts/inMemoryAlertSourceRepository";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
+import { createAlertIngestService } from "../src/services/alerts/alertIngestService";
+import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
+import { createAlertService } from "../src/services/alerts/alertService";
+import { createAlertSourceService } from "../src/services/alerts/alertSourceService";
 import { createAuthService } from "../src/services/auth/authService";
 import { createIncidentService } from "../src/services/incidents/incidentService";
 import { createMemberService } from "../src/services/members/memberService";
@@ -36,6 +51,18 @@ export const buildTestApp = (
 		tokenNowMs?: () => number;
 		notificationChannels?: InMemoryNotificationChannelRepository;
 		channelNow?: () => Date;
+		alertNow?: () => Date;
+	} = {},
+) => buildTestSystem(options).app;
+
+// The app plus the alert worker, sharing in-memory stores, for tests that follow an alert
+// from the webhook to an incident.
+export const buildTestSystem = (
+	options: {
+		tokenNowMs?: () => number;
+		notificationChannels?: InMemoryNotificationChannelRepository;
+		channelNow?: () => Date;
+		alertNow?: () => Date;
 	} = {},
 ) => {
 	const accounts = new InMemoryAccountRepository();
@@ -45,17 +72,32 @@ export const buildTestApp = (
 		hasher: testHasher(),
 		tokens: createJwtTokenService(TEST_JWT_SECRET, 3600, options.tokenNowMs),
 	});
-	return createApp({
+	const secrets = createAesGcmSecretBox(TEST_ENCRYPTION_KEY);
+	const incidents = new InMemoryIncidentRepository();
+	const alertSources = new InMemoryAlertSourceRepository();
+	const alerts = new InMemoryAlertRepository(incidents);
+	const app = createApp({
 		authenticate: async (token) => FIXED_TOKENS[token] ?? authService.authenticate(token),
 		authService,
-		incidentService: createIncidentService(new InMemoryIncidentRepository()),
+		incidentService: createIncidentService(incidents),
 		memberService: createMemberService(accounts),
 		notificationChannelService: createNotificationChannelService(
 			options.notificationChannels ?? new InMemoryNotificationChannelRepository(),
-			createAesGcmSecretBox(TEST_ENCRYPTION_KEY),
+			secrets,
 			options.channelNow,
 		),
+		alertSourceService: createAlertSourceService(alertSources, secrets),
+		alertService: createAlertService(alerts),
+		alertIngestService: createAlertIngestService({
+			sources: alertSources,
+			alerts,
+			secrets,
+			signatures: createHmacAlertSignatureVerifier(),
+			now: options.alertNow,
+		}),
 	});
+	const processor = createAlertProcessor({ queue: alerts, alerts, now: options.alertNow });
+	return { app, processor, alerts };
 };
 
 export const authed = (token: string, body?: unknown): RequestInit => ({
@@ -71,6 +113,31 @@ export const post = (body: unknown): RequestInit => ({
 });
 
 type TestApp = ReturnType<typeof buildTestApp>;
+
+// A webhook request signed as a monitoring tool would sign it.
+export const signedAlert = (
+	secret: string,
+	body: unknown,
+	timestamp = String(Math.floor(Date.now() / 1000)),
+): RequestInit => {
+	const raw = typeof body === "string" ? body : JSON.stringify(body);
+	return {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			[ALERT_TIMESTAMP_HEADER]: timestamp,
+			[ALERT_SIGNATURE_HEADER]: signAlertBody(secret, timestamp, raw),
+		},
+		body: raw,
+	};
+};
+
+// Adds an alert source as the given admin, and returns its id and secret.
+export const addAlertSource = async (app: TestApp, adminToken: string, name = "prometheus") => {
+	const res = await app.request("/v1/alert-sources", authed(adminToken, { name }));
+	const created = CreatedAlertSourceSchema.parse(await res.json());
+	return { sourceId: created.id, secret: created.secret };
+};
 
 export const signup = async (app: TestApp, email: string, tenantName = "Acme") => {
 	const res = await app.request(

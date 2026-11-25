@@ -15,6 +15,11 @@ export type Incident = {
 	acknowledgedBy: string | null;
 	resolvedAt: Date | null;
 	resolvedBy: string | null;
+	// Set only on incidents an alert source opened. See docs/features/alert-ingestion.md.
+	alertSourceId: string | null;
+	dedupKey: string | null;
+	alertCount: number;
+	lastAlertAt: Date | null;
 };
 
 export type IncidentPage = { items: Incident[]; total: number };

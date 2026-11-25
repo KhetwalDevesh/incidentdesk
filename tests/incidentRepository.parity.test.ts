@@ -27,6 +27,10 @@ const newIncident = (createdAt: Date, title = "Checkout is down"): Omit<Incident
 	acknowledgedBy: null,
 	resolvedAt: null,
 	resolvedBy: null,
+	alertSourceId: null,
+	dedupKey: null,
+	alertCount: 0,
+	lastAlertAt: null,
 });
 
 const pool = new Pool({ connectionString: TEST_DATABASE_URL });
