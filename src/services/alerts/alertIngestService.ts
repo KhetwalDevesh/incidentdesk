@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ALERT_SIGNATURE_TOLERANCE_SECONDS, AlertSourceIdSchema } from "../../contract/alerts";
 import {
 	type AlertIngestService,
+	type AlertQueue,
 	type AlertRepository,
 	type AlertSignatureVerifier,
 	type AlertSourceLookup,
@@ -16,17 +17,23 @@ const UNIX_SECONDS = /^\d{1,12}$/;
 export type AlertIngestServiceDeps = {
 	sources: AlertSourceLookup;
 	alerts: AlertRepository;
+	queue: AlertQueue;
 	secrets: SecretBox;
 	signatures: AlertSignatureVerifier;
 	now?: () => Date;
+	// Gets the alert id, never its payload. A failed send is not an error for the caller:
+	// the row is saved, and the sweeper sends it later.
+	onSendError?: (alertId: string, error: unknown) => void;
 };
 
 export const createAlertIngestService = ({
 	sources,
 	alerts,
+	queue,
 	secrets,
 	signatures,
 	now = () => new Date(),
+	onSendError = () => undefined,
 }: AlertIngestServiceDeps): AlertIngestService => {
 	// One answer for an unknown source, a stale timestamp and a bad signature,
 	// so probing cannot tell which source ids exist.
@@ -69,8 +76,18 @@ export const createAlertIngestService = ({
 				incidentId: null,
 				receivedAt,
 				processedAt: null,
+				sentAt: null,
 			});
-			return ok(alert);
+			// The row is written first, so it stays the source of truth even when this send fails.
+			try {
+				await queue.send({ tenantId: alert.tenantId, alertId: alert.id });
+				const sentAt = now();
+				await alerts.markSent(alert.tenantId, alert.id, sentAt);
+				return ok({ ...alert, sentAt });
+			} catch (error) {
+				onSendError(alert.id, error);
+				return ok(alert);
+			}
 		},
 	};
 };

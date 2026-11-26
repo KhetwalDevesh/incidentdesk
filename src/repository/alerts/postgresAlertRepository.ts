@@ -1,13 +1,19 @@
 import type { Pool, PoolClient } from "pg";
 import type { AlertListQuery } from "../../contract/alerts";
 import type { IncidentId } from "../../contract/incidents";
-import type { Alert, AlertPage, AlertQueue, AlertRepository } from "../../domain/alerts/types";
+import type {
+	Alert,
+	AlertOutbox,
+	AlertPage,
+	AlertRef,
+	AlertRepository,
+} from "../../domain/alerts/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { INCIDENT_COLUMNS } from "../incidents/postgresIncidentRepository";
 
 const COLUMNS =
-	"id, tenant_id, source_id, dedup_key, title, severity, alert_status, details, received_at, state, attempts, next_attempt_at, last_error, incident_id, processed_at";
+	"id, tenant_id, source_id, dedup_key, title, severity, alert_status, details, received_at, state, attempts, next_attempt_at, last_error, incident_id, processed_at, sent_at";
 
 type AlertRow = {
 	id: string;
@@ -25,6 +31,7 @@ type AlertRow = {
 	last_error: string | null;
 	incident_id: string | null;
 	processed_at: Date | null;
+	sent_at: Date | null;
 };
 
 const toAlert = (row: AlertRow): Alert => ({
@@ -43,6 +50,7 @@ const toAlert = (row: AlertRow): Alert => ({
 	incidentId: row.incident_id as IncidentId | null,
 	receivedAt: row.received_at,
 	processedAt: row.processed_at,
+	sentAt: row.sent_at,
 });
 
 // Opens the candidate, or attaches to the unresolved incident for its source and key.
@@ -60,13 +68,13 @@ const ATTACH_ONLY = `UPDATE incidents SET alert_count = alert_count + 1,
 	WHERE tenant_id = $1 AND alert_source_id = $2 AND dedup_key = $3 AND status <> 'resolved'
 	RETURNING id`;
 
-export class PostgresAlertRepository implements AlertRepository, AlertQueue {
+export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 	constructor(private readonly pool: Pool) {}
 
 	async enqueue(tenantId: TenantId, alert: Omit<Alert, "tenantId">): Promise<Alert> {
 		const { rows } = await this.pool.query<AlertRow>(
 			`INSERT INTO alerts (${COLUMNS})
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING ${COLUMNS}`,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING ${COLUMNS}`,
 			[
 				alert.id,
 				tenantId,
@@ -83,6 +91,7 @@ export class PostgresAlertRepository implements AlertRepository, AlertQueue {
 				alert.lastError,
 				alert.incidentId,
 				alert.processedAt,
+				alert.sentAt,
 			],
 		);
 		return toAlert(rows[0] as AlertRow);
@@ -103,28 +112,53 @@ export class PostgresAlertRepository implements AlertRepository, AlertQueue {
 		return { items: page.rows.map(toAlert), total: Number(count.rows[0]?.total ?? 0) };
 	}
 
-	// SKIP LOCKED lets concurrent workers claim disjoint rows. The lease written here keeps
-	// a claimed row out of later claims after this statement's locks are released.
-	async claimDue(now: Date, limit: number, leaseUntil: Date): Promise<Alert[]> {
+	async markSent(tenantId: TenantId, alertId: string, sentAt: Date): Promise<void> {
+		await this.pool.query("UPDATE alerts SET sent_at = $3 WHERE tenant_id = $1 AND id = $2", [
+			tenantId,
+			alertId,
+			sentAt,
+		]);
+	}
+
+	async startAttempt(tenantId: TenantId, alertId: string, leaseUntil: Date): Promise<Alert | null> {
 		const { rows } = await this.pool.query<AlertRow>(
 			`UPDATE alerts SET attempts = attempts + 1, next_attempt_at = $3
+			WHERE tenant_id = $1 AND id = $2 AND state = 'pending'
+			RETURNING ${COLUMNS}`,
+			[tenantId, alertId, leaseUntil],
+		);
+		return rows[0] ? toAlert(rows[0]) : null;
+	}
+
+	// SKIP LOCKED lets concurrent sweepers claim disjoint rows. Moving next_attempt_at to now
+	// keeps a claimed row out of later claims after this statement's locks are released.
+	async claimOverdue(
+		{ unsentBefore, sentBefore }: { unsentBefore: Date; sentBefore: Date },
+		now: Date,
+		limit: number,
+	): Promise<AlertRef[]> {
+		const { rows } = await this.pool.query<{ tenant_id: string; id: string; received_at: Date }>(
+			`UPDATE alerts SET next_attempt_at = $3
 			WHERE (tenant_id, id) IN (
 				SELECT tenant_id, id FROM alerts
-				WHERE state = 'pending' AND next_attempt_at <= $1
+				WHERE state = 'pending'
+					-- A plain range, so alerts_pending_due_idx can serve the scan.
+					AND next_attempt_at <= GREATEST($1::timestamptz, $2::timestamptz)
+					AND next_attempt_at <= CASE WHEN sent_at IS NULL THEN $1::timestamptz ELSE $2::timestamptz END
 				ORDER BY received_at, id
-				LIMIT $2
+				LIMIT $4
 				FOR UPDATE SKIP LOCKED
 			)
-			RETURNING ${COLUMNS}`,
-			[now, limit, leaseUntil],
+			RETURNING tenant_id, id, received_at`,
+			[unsentBefore, sentBefore, now, limit],
 		);
 		return rows
-			.map(toAlert)
 			.sort(
 				(a, b) =>
-					a.receivedAt.getTime() - b.receivedAt.getTime() ||
+					a.received_at.getTime() - b.received_at.getTime() ||
 					(a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-			);
+			)
+			.map((row) => ({ tenantId: row.tenant_id as TenantId, alertId: row.id }));
 	}
 
 	async complete(

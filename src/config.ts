@@ -16,6 +16,11 @@ const EnvSchema = DatabaseEnvSchema.extend({
 			(value) => Buffer.from(value, "base64").length === 32,
 			"NOTIFICATION_ENCRYPTION_KEY must be 32 bytes, base64-encoded",
 		),
+	// The alert queue. Credentials come from the AWS SDK's default provider chain, never from here.
+	AWS_REGION: z.string().min(1),
+	ALERT_QUEUE_URL: z.url(),
+	// Set only for a local emulator such as LocalStack.
+	AWS_ENDPOINT_URL: z.url().optional(),
 });
 
 export type Config = z.infer<typeof EnvSchema>;

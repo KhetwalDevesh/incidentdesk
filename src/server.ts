@@ -3,7 +3,13 @@ import { loadConfig } from "./config";
 import { buildApp } from "./containers";
 
 const config = loadConfig();
-const { app, pool } = buildApp(config);
+// Ids only: alert content is untrusted and stays out of logs.
+const { app, pool } = buildApp(config, (alertId, error) =>
+	console.error(
+		`Alert ${alertId} was saved but not queued; the sweeper will send it:`,
+		error instanceof Error ? error.message : "unknown error",
+	),
+);
 
 // An idle client can drop, for example when Postgres restarts. Without a listener that crashes the process.
 pool.on("error", (error) => console.error("Idle Postgres client error:", error.message));

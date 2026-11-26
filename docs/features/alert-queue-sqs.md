@@ -12,7 +12,9 @@ Decided by the user:
 | Message body | `{ tenantId, alertId }` only. The `alerts` row stays the source of truth |
 | Lost sends | An outbox sweeper re-sends pending alerts that are overdue |
 | Telling a lost send from a slow queue | A new `alerts.sent_at` column (migration 0008), set after `SendMessage` succeeds. The sweeper re-sends unsent rows after 2 minutes, and sent rows only after 15 minutes, so a queue backlog does not multiply messages |
-| Local emulator | LocalStack in `docker-compose.yml` |
+| Local queue | Real AWS SQS, not an emulator: LocalStack has needed an account token since 2026.03. Each developer creates their own queue and dead-letter queue with `pnpm sqs:setup`, so workers never take each other's messages. Credentials come from an AWS CLI profile named in `AWS_PROFILE`, for an IAM user limited to the queue actions on `incidentdesk-*` |
+| Region | `ap-southeast-2`. The organisation's service control policy allows SQS only there |
+| CI | No AWS credentials in CI. Unit, contract and security tests use the in-memory queue. The SQS adapter's integration test runs on demand with `pnpm test:sqs`, against a developer's test queue |
 | Postgres queue | Replaced, not kept as a second driver |
 | Branch | `feat/alert-queue-sqs`, after alert ingestion was committed |
 
@@ -61,10 +63,11 @@ Code:
 
 - New port `AlertQueue` (replaces the `claimDue` one): `send(ref)`, `receive(max, waitSeconds)`, `delete(message)`, `retryAfter(message, delayMs)`.
 - Adapters: `src/adapters/sqsAlertQueue.ts` (`@aws-sdk/client-sqs`) and an in-memory queue for unit and contract tests.
-- `AlertRepository` gains `startAttempt(tenantId, alertId, leaseUntil)`, which returns the alert or null, and `markSent(tenantId, alertId, sentAt)`. The pre-tenant `claimDue` becomes `claimOverdue(now, limit)`, used only by the sweeper, which applies the two cutoffs.
+- `AlertRepository` gains `startAttempt(tenantId, alertId, leaseUntil)`, which returns the alert or null, and `markSent(tenantId, alertId, sentAt)`. The pre-tenant `claimDue` becomes `claimOverdue({ unsentBefore, sentBefore }, now, limit)` on a separate `AlertOutbox` port, used only by the sweeper. The processor computes the two cutoffs, so the repository holds no timing policy.
 - `AlertProcessor` gets `processMessages()` and `sweep()`. `src/worker.ts` runs both.
-- Config: `AWS_REGION`, `ALERT_QUEUE_URL`, and an optional `AWS_ENDPOINT_URL` for LocalStack. Credentials come from the default AWS provider chain. `.env.example` uses LocalStack's `test` credentials.
-- `docker-compose.yml` adds LocalStack with `SERVICES=sqs`. An init script creates `incidentdesk-alerts` (visibility timeout 60 s) and `incidentdesk-alerts-dlq`, with a redrive policy of `maxReceiveCount` 10.
+- Config: `AWS_REGION`, `ALERT_QUEUE_URL`, and an optional `AWS_ENDPOINT_URL` for an emulator, unused by default. Credentials come from the default AWS provider chain. `.env.example` names a profile in `AWS_PROFILE` and holds no keys.
+- `scripts/setup-sqs-queues.ts` (`pnpm sqs:setup --name <queue> --region <region>`) creates `<queue>` (visibility timeout 60 s, long poll 20 s, SSE on) and `<queue>-dlq`, with a redrive policy of `maxReceiveCount` 10. It is idempotent while the settings match.
+- `pnpm test:sqs` runs `tests/*.integration.test.ts` through `vitest.integration.config.ts`, which loads `.env`. `pnpm test` excludes these files.
 - The new dependency is `@aws-sdk/client-sqs`.
 
 ## Edge cases and failures
@@ -85,6 +88,7 @@ Code:
 - The body carries ids only, so whoever can send to the queue can only trigger processing of rows that already exist. They cannot inject alert content or pick a tenant's incident.
 - `tenantId` in the message is written by our webhook, which took it from the source row. The worker still loads the row by `(tenantId, alertId)`, so a mismatched pair finds nothing.
 - `claimOverdue` runs across all tenants, like `claimDue` today. Audit every caller.
+- Local AWS credentials live in an AWS CLI profile, never in `.env` or the repository. Use an IAM user that can only call `sqs:CreateQueue`, `sqs:GetQueueAttributes`, `sqs:SendMessage`, `sqs:ReceiveMessage`, `sqs:DeleteMessage` and `sqs:ChangeMessageVisibility` on `arn:aws:sqs:*:<account>:incidentdesk-*`.
 - AWS credentials are never logged. In production, IAM limits the API role to `sqs:SendMessage` and the worker role to receive, delete and change visibility. That is Phase 6 infrastructure.
 - Logs carry alert and message ids, never alert content.
 
@@ -98,13 +102,13 @@ Code:
 
 ## Done when
 
-- [ ] The webhook saves the row and sends `{ tenantId, alertId }`. A failed send still returns 202 and leaves the row pending (`tests/alertIngest.contract.test.ts`)
-- [ ] The worker groups alerts from queue messages, as before (`src/services/alerts/alertProcessor.test.ts`)
-- [ ] A duplicate message does not group twice, and a malformed or unknown message is deleted (`alertProcessor.test.ts`)
-- [ ] A failing alert retries with the backoff delays as visibility changes, and becomes `failed` after 5 attempts. A crash loop is counted too (`alertProcessor.test.ts`)
-- [ ] Migration 0008 adds `alerts.sent_at`. A successful send sets it, and a failed send leaves it empty (`tests/alertIngest.contract.test.ts`, `tests/alertRepository.parity.test.ts`)
-- [ ] The sweeper re-sends unsent pending rows after 2 minutes and sent ones only after 15 minutes. It never re-sends a row that is in flight, waiting for its backoff, or queued behind a backlog (`alertProcessor.test.ts`, `tests/alertRepository.parity.test.ts`)
-- [ ] The SQS adapter sends, receives, deletes and changes visibility against LocalStack (`tests/sqsAlertQueue.integration.test.ts`)
-- [ ] CI starts LocalStack, and `pnpm check` passes
-- [ ] A manual run through LocalStack turns signed alerts into one grouped incident
-- [ ] The contract is unchanged
+- [x] The webhook saves the row and sends `{ tenantId, alertId }`. A failed send still returns 202 and leaves the row pending (`tests/alertIngest.contract.test.ts`)
+- [x] The worker groups alerts from queue messages, as before (`src/services/alerts/alertProcessor.test.ts`)
+- [x] A duplicate message does not group twice, and a malformed or unknown message is deleted (`alertProcessor.test.ts`)
+- [x] A failing alert retries with the backoff delays as visibility changes, and becomes `failed` after 5 attempts. A crash loop is counted too (`alertProcessor.test.ts`)
+- [x] Migration 0008 adds `alerts.sent_at`. A successful send sets it, and a failed send leaves it empty (`tests/alertIngest.contract.test.ts`, `tests/alertRepository.parity.test.ts`)
+- [x] The sweeper re-sends unsent pending rows after 2 minutes and sent ones only after 15 minutes. It never re-sends a row that is in flight, waiting for its backoff, or queued behind a backlog (`alertProcessor.test.ts`, `tests/alertRepository.parity.test.ts`)
+- [x] The SQS adapter sends, receives, deletes and changes visibility against a real SQS test queue (`pnpm test:sqs`, `tests/sqsAlertQueue.integration.test.ts`: 3 passed against `ap-southeast-2`)
+- [x] CI needs no AWS credentials, and `pnpm check` passes (296 tests)
+- [x] A manual run through a real dev queue turns signed alerts into one grouped incident (3 signed alerts gave 202, then one incident with `alertCount` 3 within 3.3 s, each alert processed on attempt 1 with `sent_at` set)
+- [x] The contract is unchanged

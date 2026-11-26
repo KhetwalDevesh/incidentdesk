@@ -17,6 +17,8 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
+		"test:sqs": "vitest run --config vitest.integration.config.ts",
+		"sqs:setup": "tsx --env-file-if-exists=.env scripts/setup-sqs-queues.ts",
 		"contract:generate": "tsx scripts/generate-openapi.ts",
 		"contract:check": "tsx scripts/generate-openapi.ts --check",
 		"enforce": "tsx scripts/enforce-rules.ts",
@@ -28,6 +30,7 @@
 	},
 	"dependencies": {
 		"@asteasolutions/zod-to-openapi": "^9.1.0",
+		"@aws-sdk/client-sqs": "^3.1178.0",
 		"@hono/node-server": "^2.1.5",
 		"@node-rs/argon2": "^2.2.2",
 		"hono": "^4.13.13",

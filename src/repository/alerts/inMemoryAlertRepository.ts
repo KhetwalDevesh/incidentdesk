@@ -1,6 +1,12 @@
 import type { AlertListQuery } from "../../contract/alerts";
 import type { IncidentId } from "../../contract/incidents";
-import type { Alert, AlertPage, AlertQueue, AlertRepository } from "../../domain/alerts/types";
+import type {
+	Alert,
+	AlertOutbox,
+	AlertPage,
+	AlertRef,
+	AlertRepository,
+} from "../../domain/alerts/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { TenantId } from "../../domain/shared/identity";
 import type { InMemoryIncidentRepository } from "../incidents/inMemoryIncidentRepository";
@@ -8,7 +14,7 @@ import type { InMemoryIncidentRepository } from "../incidents/inMemoryIncidentRe
 const compareIds = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 // Methods do not await between a check and its write, so each one is atomic like its SQL twin.
-export class InMemoryAlertRepository implements AlertRepository, AlertQueue {
+export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 	private readonly alerts = new Map<string, Alert>();
 
 	// Shares the incident store, as the Postgres twin shares the database.
@@ -28,15 +34,36 @@ export class InMemoryAlertRepository implements AlertRepository, AlertQueue {
 		return { items: owned.slice(offset, offset + limit), total: owned.length };
 	}
 
-	async claimDue(now: Date, limit: number, leaseUntil: Date): Promise<Alert[]> {
-		const due = [...this.alerts.values()]
-			.filter((alert) => alert.state === "pending" && alert.nextAttemptAt <= now)
+	async markSent(tenantId: TenantId, alertId: string, sentAt: Date): Promise<void> {
+		const alert = this.alerts.get(alertId);
+		if (alert?.tenantId !== tenantId) return;
+		this.alerts.set(alertId, { ...alert, sentAt });
+	}
+
+	async startAttempt(tenantId: TenantId, alertId: string, leaseUntil: Date): Promise<Alert | null> {
+		const alert = this.alerts.get(alertId);
+		if (alert?.tenantId !== tenantId || alert.state !== "pending") return null;
+		const started = { ...alert, attempts: alert.attempts + 1, nextAttemptAt: leaseUntil };
+		this.alerts.set(alertId, started);
+		return started;
+	}
+
+	async claimOverdue(
+		{ unsentBefore, sentBefore }: { unsentBefore: Date; sentBefore: Date },
+		now: Date,
+		limit: number,
+	): Promise<AlertRef[]> {
+		const overdue = [...this.alerts.values()]
+			.filter(
+				(alert) =>
+					alert.state === "pending" &&
+					alert.nextAttemptAt <= (alert.sentAt === null ? unsentBefore : sentBefore),
+			)
 			.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime() || compareIds(a.id, b.id))
 			.slice(0, limit);
-		return due.map((alert) => {
-			const claimed = { ...alert, attempts: alert.attempts + 1, nextAttemptAt: leaseUntil };
-			this.alerts.set(alert.id, claimed);
-			return claimed;
+		return overdue.map((alert) => {
+			this.alerts.set(alert.id, { ...alert, nextAttemptAt: now });
+			return { tenantId: alert.tenantId, alertId: alert.id };
 		});
 	}
 

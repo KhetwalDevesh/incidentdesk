@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Decision
 
-Alert delivery from the webhook to the worker uses an AWS SQS standard queue instead of polling the `alerts` table. Messages carry only `{ tenantId, alertId }`. The `alerts` row stays the source of truth for content, state and history. An outbox sweeper re-sends pending rows that are overdue. LocalStack provides SQS locally and in CI. The Postgres polling queue is removed, not kept as a fallback.
+Alert delivery from the webhook to the worker uses an AWS SQS standard queue instead of polling the `alerts` table. Messages carry only `{ tenantId, alertId }`. The `alerts` row stays the source of truth for content, state and history. An outbox sweeper re-sends pending rows that are overdue. Developers use their own real SQS queues locally. CI uses an in-memory queue and needs no AWS credentials. The Postgres polling queue is removed, not kept as a fallback.
 
 ## Context
 
@@ -16,7 +16,8 @@ SQS cannot share a transaction with Postgres. Sending the full payload would mak
 
 ## Consequences
 
-- Local development and CI need LocalStack running, as they already need Postgres.
+- Local development needs an AWS account, a CLI profile and per-developer queues (`pnpm sqs:setup`). An emulator was rejected: LocalStack has needed an account token since 2026.03, and real SQS stays within the always-free 1 million requests a month at development volume.
+- CI does not touch AWS, so the SQS adapter is proven only by `pnpm test:sqs`, run by hand before merging changes to it.
 - A new runtime dependency, `@aws-sdk/client-sqs`, and new config: `AWS_REGION`, `ALERT_QUEUE_URL` and `AWS_ENDPOINT_URL`.
 - Delivery is at least once. Correctness depends on `startAttempt` and `complete()` staying idempotent through the `pending` check and row lock.
 - Retry backoff uses `ChangeMessageVisibility`. Attempts are counted in Postgres, so a crash loop still ends in `failed`.

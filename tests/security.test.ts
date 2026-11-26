@@ -1,12 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { sign } from "hono/jwt";
 import { beforeEach, describe, expect, it } from "vitest";
-import { AlertListSchema, AlertSourceListSchema } from "../src/contract/alerts";
+import {
+	AlertAcceptedSchema,
+	AlertListSchema,
+	AlertSourceListSchema,
+} from "../src/contract/alerts";
 import { AccessTokenSchema } from "../src/contract/auth";
 import { ProblemSchema } from "../src/contract/common";
 import { IncidentListSchema, IncidentSchema } from "../src/contract/incidents";
 import { MemberInviteSchema, MemberListSchema } from "../src/contract/members";
 import { NotificationChannelListSchema } from "../src/contract/notificationChannels";
+import type { TenantId } from "../src/domain/shared/identity";
 import {
 	addAlertSource,
 	authed,
@@ -393,10 +398,27 @@ describe("alert ingestion", () => {
 			signedAlert(globex.secret, alert),
 		);
 
-		await system.processor.processBatch();
+		await system.processor.processMessages();
 
 		expect((await incidentsOf("acme-admin")).items).toMatchObject([{ alertCount: 1 }]);
 		expect((await incidentsOf(globexAdmin)).items).toMatchObject([{ alertCount: 1 }]);
+	});
+
+	it("groups nothing for a queue message that pairs an alert with another tenant", async () => {
+		const acme = await addAlertSource(system.app, "acme-admin");
+		const res = await system.app.request(
+			`/webhooks/alerts/${acme.sourceId}`,
+			signedAlert(acme.secret, alert),
+		);
+		const { alertId } = AlertAcceptedSchema.parse(await res.json());
+		// Whoever can send to the queue names only ids. A mismatched pair finds no row.
+		await system.queue.send({ tenantId: randomUUID() as TenantId, alertId });
+
+		await system.processor.processMessages();
+
+		expect((await incidentsOf("acme-admin")).items).toMatchObject([{ alertCount: 1 }]);
+		expect((await incidentsOf(globexAdmin)).total).toBe(0);
+		expect(system.queue.size).toBe(0);
 	});
 
 	it("refuses one tenant's secret on another tenant's source", async () => {
@@ -409,7 +431,7 @@ describe("alert ingestion", () => {
 		);
 
 		expect(res.status).toBe(401);
-		expect(await system.processor.processBatch()).toBe(0);
+		expect(await system.processor.processMessages()).toBe(0);
 	});
 
 	it("rejects a tenantId in the alert body, and files nothing", async () => {
@@ -421,7 +443,7 @@ describe("alert ingestion", () => {
 		);
 
 		expect(res.status).toBe(422);
-		expect(await system.processor.processBatch()).toBe(0);
+		expect(await system.processor.processMessages()).toBe(0);
 	});
 
 	it("ignores a bearer token on the webhook: only the signature counts", async () => {

@@ -10,11 +10,14 @@ import {
 } from "../src/contract/alerts";
 import { ProblemSchema } from "../src/contract/common";
 import { IncidentListSchema } from "../src/contract/incidents";
+import type { TenantId } from "../src/domain/shared/identity";
 import { addAlertSource, authed, buildTestSystem, signedAlert } from "./helpers";
 
 const NOW = new Date("2026-06-01T12:00:00.000Z");
 const NOW_SECONDS = String(NOW.getTime() / 1000);
 const alert = { dedupKey: "db-cpu-high", title: "DB CPU above 90%", severity: "sev2" };
+// The tenant behind the fixed "acme-admin" token.
+const ACME = "tenant-acme" as TenantId;
 
 describe("alert webhook contract", () => {
 	let system: ReturnType<typeof buildTestSystem>;
@@ -49,6 +52,28 @@ describe("alert webhook contract", () => {
 		]);
 	});
 
+	it("sends only the tenant and alert ids to the queue, and records the send", async () => {
+		const res = await send({ ...alert, details: { host: "db-1" } });
+
+		const { alertId } = AlertAcceptedSchema.parse(await res.json());
+		const [message] = await system.queue.receive(10, 0);
+		expect(JSON.parse(message?.body ?? "null")).toEqual({ tenantId: ACME, alertId });
+		const [stored] = (await system.alerts.list(ACME, { limit: 10, offset: 0 })).items;
+		expect(stored).toMatchObject({ id: alertId, state: "pending", sentAt: NOW });
+	});
+
+	it("still returns 202 and keeps the alert pending and unsent when the queue is down", async () => {
+		system.queue.failSends = true;
+
+		const res = await send(alert);
+
+		expect(res.status).toBe(202);
+		const { alertId } = AlertAcceptedSchema.parse(await res.json());
+		expect(system.queue.size).toBe(0);
+		const [stored] = (await system.alerts.list(ACME, { limit: 10, offset: 0 })).items;
+		expect(stored).toMatchObject({ id: alertId, state: "pending", sentAt: null });
+	});
+
 	it("needs no bearer token", async () => {
 		const res = await send(alert);
 
@@ -60,7 +85,7 @@ describe("alert webhook contract", () => {
 		const before = await system.app.request("/v1/incidents", authed("acme-viewer"));
 		expect(IncidentListSchema.parse(await before.json()).total).toBe(0);
 
-		await system.processor.processBatch();
+		await system.processor.processMessages();
 
 		const after = await system.app.request("/v1/incidents", authed("acme-viewer"));
 		expect(IncidentListSchema.parse(await after.json()).items).toMatchObject([
@@ -78,7 +103,7 @@ describe("alert webhook contract", () => {
 	it("groups repeated alerts into one incident", async () => {
 		for (let i = 0; i < 3; i++) await send(alert);
 
-		await system.processor.processBatch();
+		await system.processor.processMessages();
 
 		const res = await system.app.request("/v1/incidents", authed("acme-viewer"));
 		const page = IncidentListSchema.parse(await res.json());

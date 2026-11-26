@@ -4,6 +4,7 @@ import {
 	createHmacAlertSignatureVerifier,
 	signAlertBody,
 } from "../src/adapters/hmacAlertSignature";
+import { InMemoryAlertQueue } from "../src/adapters/inMemoryAlertQueue";
 import { createJwtTokenService } from "../src/adapters/jwtTokenService";
 import {
 	ALERT_SIGNATURE_HEADER,
@@ -76,6 +77,7 @@ export const buildTestSystem = (
 	const incidents = new InMemoryIncidentRepository();
 	const alertSources = new InMemoryAlertSourceRepository();
 	const alerts = new InMemoryAlertRepository(incidents);
+	const queue = new InMemoryAlertQueue({ now: options.alertNow });
 	const app = createApp({
 		authenticate: async (token) => FIXED_TOKENS[token] ?? authService.authenticate(token),
 		authService,
@@ -91,13 +93,19 @@ export const buildTestSystem = (
 		alertIngestService: createAlertIngestService({
 			sources: alertSources,
 			alerts,
+			queue,
 			secrets,
 			signatures: createHmacAlertSignatureVerifier(),
 			now: options.alertNow,
 		}),
 	});
-	const processor = createAlertProcessor({ queue: alerts, alerts, now: options.alertNow });
-	return { app, processor, alerts };
+	const processor = createAlertProcessor({
+		queue,
+		alerts,
+		outbox: alerts,
+		now: options.alertNow,
+	});
+	return { app, processor, alerts, queue };
 };
 
 export const authed = (token: string, body?: unknown): RequestInit => ({
