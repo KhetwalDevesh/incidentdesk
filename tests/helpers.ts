@@ -17,12 +17,14 @@ import { createApp } from "../src/http/app";
 import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAccountRepository";
 import { InMemoryAlertRepository } from "../src/repository/alerts/inMemoryAlertRepository";
 import { InMemoryAlertSourceRepository } from "../src/repository/alerts/inMemoryAlertSourceRepository";
+import { InMemoryAuditStore } from "../src/repository/audit/inMemoryAuditStore";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { createAlertIngestService } from "../src/services/alerts/alertIngestService";
 import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
 import { createAlertService } from "../src/services/alerts/alertService";
 import { createAlertSourceService } from "../src/services/alerts/alertSourceService";
+import { createAuditService } from "../src/services/audit/auditService";
 import { createAuthService } from "../src/services/auth/authService";
 import { createIncidentService } from "../src/services/incidents/incidentService";
 import { createMemberService } from "../src/services/members/memberService";
@@ -66,16 +68,19 @@ export const buildTestSystem = (
 		alertNow?: () => Date;
 	} = {},
 ) => {
-	const accounts = new InMemoryAccountRepository();
+	// One audit store for every repository, as Postgres has one audit_events table.
+	const audit = new InMemoryAuditStore();
+	const accounts = new InMemoryAccountRepository(audit);
 	const authService = createAuthService({
 		credentials: accounts,
 		accounts,
 		hasher: testHasher(),
 		tokens: createJwtTokenService(TEST_JWT_SECRET, 3600, options.tokenNowMs),
+		audit,
 	});
 	const secrets = createAesGcmSecretBox(TEST_ENCRYPTION_KEY);
-	const incidents = new InMemoryIncidentRepository();
-	const alertSources = new InMemoryAlertSourceRepository();
+	const incidents = new InMemoryIncidentRepository(audit);
+	const alertSources = new InMemoryAlertSourceRepository(audit);
 	const alerts = new InMemoryAlertRepository(incidents);
 	const queue = new InMemoryAlertQueue({ now: options.alertNow });
 	const app = createApp({
@@ -84,7 +89,7 @@ export const buildTestSystem = (
 		incidentService: createIncidentService(incidents),
 		memberService: createMemberService(accounts),
 		notificationChannelService: createNotificationChannelService(
-			options.notificationChannels ?? new InMemoryNotificationChannelRepository(),
+			options.notificationChannels ?? new InMemoryNotificationChannelRepository(audit),
 			secrets,
 			options.channelNow,
 		),
@@ -98,6 +103,7 @@ export const buildTestSystem = (
 			signatures: createHmacAlertSignatureVerifier(),
 			now: options.alertNow,
 		}),
+		auditService: createAuditService(audit, incidents),
 	});
 	const processor = createAlertProcessor({
 		queue,
@@ -105,7 +111,7 @@ export const buildTestSystem = (
 		outbox: alerts,
 		now: options.alertNow,
 	});
-	return { app, processor, alerts, queue };
+	return { app, processor, alerts, queue, audit };
 };
 
 export const authed = (token: string, body?: unknown): RequestInit => ({

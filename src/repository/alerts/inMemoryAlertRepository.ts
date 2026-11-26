@@ -6,7 +6,9 @@ import type {
 	AlertPage,
 	AlertRef,
 	AlertRepository,
+	GroupingOutcome,
 } from "../../domain/alerts/types";
+import type { AuditEntry } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { TenantId } from "../../domain/shared/identity";
 import type { InMemoryIncidentRepository } from "../incidents/inMemoryIncidentRepository";
@@ -72,6 +74,7 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 		alertId: string,
 		candidate: Omit<Incident, "tenantId"> | null,
 		processedAt: Date,
+		audit: (outcome: GroupingOutcome) => AuditEntry[],
 	): Promise<{ incidentId: IncidentId | null } | null> {
 		const alert = this.alerts.get(alertId);
 		if (alert?.tenantId !== tenantId || alert.state !== "pending") return null;
@@ -81,7 +84,9 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 			alert.sourceId,
 			alert.dedupKey,
 		);
-		let incidentId: IncidentId | null = null;
+		const incidentId = existing?.id ?? candidate?.id ?? null;
+		const entries = audit({ incidentId, opened: !existing && candidate !== null });
+		this.incidents.audit.checkSync(entries);
 		if (existing) {
 			this.incidents.putSync({
 				...existing,
@@ -91,11 +96,10 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 						? existing.lastAlertAt
 						: alert.receivedAt,
 			});
-			incidentId = existing.id;
 		} else if (candidate) {
 			this.incidents.putSync({ ...candidate, tenantId });
-			incidentId = candidate.id;
 		}
+		this.incidents.audit.appendSync(entries);
 
 		this.alerts.set(alertId, {
 			...alert,

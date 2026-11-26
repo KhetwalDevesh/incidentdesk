@@ -12,7 +12,9 @@ export const incidentRoutes = (service: IncidentService) =>
 			const parsed = CreateIncidentRequestSchema.safeParse(await c.req.json().catch(() => null));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.create(c.get("principal"), parsed.data);
+			const result = await service.create(c.get("principal"), parsed.data, {
+				requestId: c.get("requestId"),
+			});
 			return respond(c, result, (incident) => {
 				c.header("Location", `/v1/incidents/${incident.id}`);
 				return c.json(toIncidentResponse(incident), 201);
@@ -38,13 +40,17 @@ export const incidentRoutes = (service: IncidentService) =>
 			const parsed = IncidentIdSchema.safeParse(c.req.param("id"));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.acknowledge(c.get("principal"), parsed.data);
+			const result = await service.acknowledge(c.get("principal"), parsed.data, {
+				requestId: c.get("requestId"),
+			});
 			return respond(c, result, (incident) => c.json(toIncidentResponse(incident)));
 		})
 		.post("/:id/resolve", async (c) => {
 			const parsed = IncidentIdSchema.safeParse(c.req.param("id"));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.resolve(c.get("principal"), parsed.data);
+			const result = await service.resolve(c.get("principal"), parsed.data, {
+				requestId: c.get("requestId"),
+			});
 			return respond(c, result, (incident) => c.json(toIncidentResponse(incident)));
 		});

@@ -24,6 +24,7 @@ import { PostgresIncidentRepository } from "../src/repository/incidents/postgres
 import { runMigrations } from "../src/repository/postgres/migrate";
 import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
 import { createAlertSourceService } from "../src/services/alerts/alertSourceService";
+import { anAudit, groupingAudit } from "./auditEntries";
 
 const TEST_DATABASE_URL =
 	process.env.TEST_DATABASE_URL ??
@@ -116,7 +117,11 @@ describe.each([
 		stores = make();
 		acme = await newTenant();
 		globex = await newTenant();
-		source = (await stores.sources.create(acme, newSource("prometheus"))) as AlertSource;
+		source = (await stores.sources.create(
+			acme,
+			newSource("prometheus"),
+			anAudit(acme),
+		)) as AlertSource;
 		clock = Date.parse("2030-01-01T00:00:00Z");
 	});
 
@@ -168,7 +173,7 @@ describe.each([
 		it("round-trips every field, by tenant and by id", async () => {
 			const input = newSource("grafana");
 
-			const created = await stores.sources.create(acme, input);
+			const created = await stores.sources.create(acme, input, anAudit(acme));
 
 			expect(created).toEqual({ ...input, tenantId: acme });
 			expect(await stores.sources.findForIngest(input.id)).toEqual(created);
@@ -176,13 +181,19 @@ describe.each([
 		});
 
 		it("refuses a duplicate name in the same tenant, but allows it in another", async () => {
-			expect(await stores.sources.create(acme, newSource("prometheus"))).toBeNull();
-			expect(await stores.sources.create(globex, newSource("prometheus"))).not.toBeNull();
+			expect(await stores.sources.create(acme, newSource("prometheus"), anAudit(acme))).toBeNull();
+			expect(
+				await stores.sources.create(globex, newSource("prometheus"), anAudit(globex)),
+			).not.toBeNull();
 		});
 
 		it("lists only the tenant's sources, oldest first, with a total", async () => {
-			await stores.sources.create(acme, newSource("a", new Date("2025-12-31T00:00:00Z")));
-			await stores.sources.create(globex, newSource("other"));
+			await stores.sources.create(
+				acme,
+				newSource("a", new Date("2025-12-31T00:00:00Z")),
+				anAudit(acme),
+			);
+			await stores.sources.create(globex, newSource("other"), anAudit(globex));
 
 			const page = await stores.sources.list(acme, { limit: 1, offset: 0 });
 
@@ -236,7 +247,7 @@ describe.each([
 			expect(started).toEqual({ ...alert, tenantId: acme, attempts: 1, nextAttemptAt: at(60_000) });
 			expect((await stores.alerts.startAttempt(acme, alert.id, at(70_000)))?.attempts).toBe(2);
 
-			await stores.alerts.complete(acme, alert.id, null, at());
+			await stores.alerts.complete(acme, alert.id, null, at(), groupingAudit(acme));
 			expect(await stores.alerts.startAttempt(acme, alert.id, at(80_000))).toBeNull();
 			expect((await stored())[0]?.attempts).toBe(2);
 		});
@@ -258,6 +269,7 @@ describe.each([
 			const globexSource = (await stores.sources.create(
 				globex,
 				newSource("prometheus"),
+				anAudit(globex),
 			)) as AlertSource;
 			await stores.alerts.enqueue(globex, { ...otherTenant, sourceId: globexSource.id });
 
@@ -280,7 +292,7 @@ describe.each([
 			const failed = newAlert();
 			await stores.alerts.enqueue(acme, processed);
 			await stores.alerts.enqueue(acme, failed);
-			await stores.alerts.complete(acme, processed.id, null, at());
+			await stores.alerts.complete(acme, processed.id, null, at(), groupingAudit(acme));
 			await stores.alerts.fail(acme, failed.id, "boom", null, at());
 
 			expect(await claimOverdue()).toEqual([]);
@@ -292,8 +304,20 @@ describe.each([
 			await stores.alerts.enqueue(acme, first);
 			await stores.alerts.enqueue(acme, second);
 
-			const opened = await stores.alerts.complete(acme, first.id, candidate(first), at(5));
-			const attached = await stores.alerts.complete(acme, second.id, candidate(second), at(6));
+			const opened = await stores.alerts.complete(
+				acme,
+				first.id,
+				candidate(first),
+				at(5),
+				groupingAudit(acme),
+			);
+			const attached = await stores.alerts.complete(
+				acme,
+				second.id,
+				candidate(second),
+				at(6),
+				groupingAudit(acme),
+			);
 
 			expect(attached?.incidentId).toBe(opened?.incidentId);
 			const incident = await stores.incidents.findById(acme, opened?.incidentId as IncidentId);
@@ -315,8 +339,14 @@ describe.each([
 			await stores.alerts.enqueue(acme, older);
 
 			const { incidentId } =
-				(await stores.alerts.complete(acme, newer.id, candidate(newer), at())) ?? {};
-			await stores.alerts.complete(acme, older.id, candidate(older), at());
+				(await stores.alerts.complete(
+					acme,
+					newer.id,
+					candidate(newer),
+					at(),
+					groupingAudit(acme),
+				)) ?? {};
+			await stores.alerts.complete(acme, older.id, candidate(older), at(), groupingAudit(acme));
 
 			const incident = await stores.incidents.findById(acme, incidentId as IncidentId);
 			expect(incident?.lastAlertAt).toEqual(at(5000));
@@ -326,7 +356,9 @@ describe.each([
 			const lonely = newAlert({ status: "resolved" });
 			await stores.alerts.enqueue(acme, lonely);
 
-			expect(await stores.alerts.complete(acme, lonely.id, null, at())).toEqual({
+			expect(
+				await stores.alerts.complete(acme, lonely.id, null, at(), groupingAudit(acme)),
+			).toEqual({
 				incidentId: null,
 			});
 		});
@@ -336,12 +368,30 @@ describe.each([
 			const second = newAlert({ dedupKey: first.dedupKey });
 			await stores.alerts.enqueue(acme, first);
 			await stores.alerts.enqueue(acme, second);
-			const opened = await stores.alerts.complete(acme, first.id, candidate(first), at());
-			await stores.incidents.update(acme, opened?.incidentId as IncidentId, "open", {
-				status: "resolved",
-			});
+			const opened = await stores.alerts.complete(
+				acme,
+				first.id,
+				candidate(first),
+				at(),
+				groupingAudit(acme),
+			);
+			await stores.incidents.update(
+				acme,
+				opened?.incidentId as IncidentId,
+				"open",
+				{
+					status: "resolved",
+				},
+				anAudit(acme, "incident.acknowledged"),
+			);
 
-			const reopened = await stores.alerts.complete(acme, second.id, candidate(second), at());
+			const reopened = await stores.alerts.complete(
+				acme,
+				second.id,
+				candidate(second),
+				at(),
+				groupingAudit(acme),
+			);
 
 			expect(reopened?.incidentId).not.toBe(opened?.incidentId);
 		});
@@ -350,8 +400,20 @@ describe.each([
 			const alert = newAlert();
 			await stores.alerts.enqueue(acme, alert);
 
-			const first = await stores.alerts.complete(acme, alert.id, candidate(alert), at());
-			const second = await stores.alerts.complete(acme, alert.id, candidate(alert), at());
+			const first = await stores.alerts.complete(
+				acme,
+				alert.id,
+				candidate(alert),
+				at(),
+				groupingAudit(acme),
+			);
+			const second = await stores.alerts.complete(
+				acme,
+				alert.id,
+				candidate(alert),
+				at(),
+				groupingAudit(acme),
+			);
 
 			expect(first?.incidentId).not.toBeNull();
 			expect(second).toBeNull();
@@ -363,7 +425,15 @@ describe.each([
 			const alert = newAlert();
 			await stores.alerts.enqueue(acme, alert);
 
-			expect(await stores.alerts.complete(globex, alert.id, candidate(alert), at())).toBeNull();
+			expect(
+				await stores.alerts.complete(
+					globex,
+					alert.id,
+					candidate(alert),
+					at(),
+					groupingAudit(globex),
+				),
+			).toBeNull();
 			await stores.alerts.fail(globex, alert.id, "boom", null, at());
 
 			expect((await stores.alerts.list(acme, { limit: 10, offset: 0 })).items[0]).toMatchObject({
@@ -397,7 +467,11 @@ describe("alert grouping races in postgres", () => {
 		const tenantId = await newTenant();
 		const sources = new PostgresAlertSourceRepository(pool);
 		const alerts = new PostgresAlertRepository(pool);
-		const source = (await sources.create(tenantId, newSource("prometheus"))) as AlertSource;
+		const source = (await sources.create(
+			tenantId,
+			newSource("prometheus"),
+			anAudit(tenantId),
+		)) as AlertSource;
 		const now = new Date("2030-01-01T00:00:00Z");
 		const dedupKey = `race-${randomUUID()}`;
 		const count = 8;

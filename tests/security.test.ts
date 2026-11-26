@@ -6,6 +6,7 @@ import {
 	AlertListSchema,
 	AlertSourceListSchema,
 } from "../src/contract/alerts";
+import { AuditEventListSchema } from "../src/contract/audit";
 import { AccessTokenSchema } from "../src/contract/auth";
 import { ProblemSchema } from "../src/contract/common";
 import { IncidentListSchema, IncidentSchema } from "../src/contract/incidents";
@@ -483,5 +484,96 @@ describe("request ids", () => {
 		});
 
 		expect(res.headers.get("X-Request-ID")).not.toContain("bad");
+	});
+});
+
+describe("audit log", () => {
+	let system: ReturnType<typeof buildTestSystem>;
+
+	beforeEach(() => {
+		system = buildTestSystem();
+	});
+
+	const log = async (token: string) => {
+		const res = await system.app.request("/v1/audit-events?limit=100", authed(token));
+		expect(res.status).toBe(200);
+		return res.text();
+	};
+
+	it("shows each tenant only its own events, and hides another tenant's incident timeline", async () => {
+		const globexAdmin = await signup(system.app, "admin@globex.example", "Globex");
+		const res = await system.app.request(
+			"/v1/incidents",
+			authed("acme-responder", { title: "Checkout is down", severity: "sev1" }),
+		);
+		const { id } = IncidentSchema.parse(await res.json());
+
+		const globexLog = AuditEventListSchema.parse(JSON.parse(await log(globexAdmin)));
+		const timeline = await system.app.request(`/v1/incidents/${id}/events`, authed(globexAdmin));
+
+		expect(globexLog.items.map((event) => event.action)).toEqual(["tenant.created"]);
+		expect(JSON.stringify(globexLog)).not.toContain(id);
+		expect(timeline.status).toBe(404);
+	});
+
+	it("never filters its way into another tenant's events", async () => {
+		const globexAdmin = await signup(system.app, "admin@globex.example", "Globex");
+		await system.app.request(
+			"/v1/incidents",
+			authed("acme-responder", { title: "Checkout is down", severity: "sev1" }),
+		);
+
+		const res = await system.app.request(
+			"/v1/audit-events?actorId=user-1&action=incident.created",
+			authed(globexAdmin),
+		);
+
+		expect(AuditEventListSchema.parse(await res.json()).total).toBe(0);
+	});
+
+	it("never carries a secret, token, webhook URL, password or email, to any role", async () => {
+		const ownerToken = await signup(system.app, "owner@initech.example", "Initech");
+		const { secret } = await addAlertSource(system.app, ownerToken);
+		const webhookUrl = "https://hooks.slack.com/services/T000/B000/abcdWXYZ";
+		await system.app.request(
+			"/v1/notification-channels",
+			authed(ownerToken, { name: "#ops", webhookUrl }),
+		);
+		const invite = await system.app.request(
+			"/v1/members",
+			authed(ownerToken, { email: "milton@initech.example", role: "viewer" }),
+		);
+		const { setupToken } = (await invite.json()) as { setupToken: string };
+		await system.app.request(
+			"/v1/auth/setup-password",
+			post({ token: setupToken, password: "stapler stapler stapler" }),
+		);
+		await system.app.request(
+			"/v1/auth/login",
+			post({ email: "milton@initech.example", password: "a guessed password" }),
+		);
+		const login = await system.app.request(
+			"/v1/auth/login",
+			post({ email: "milton@initech.example", password: "stapler stapler stapler" }),
+		);
+		const { accessToken: viewerToken } = (await login.json()) as { accessToken: string };
+
+		for (const token of [ownerToken, viewerToken]) {
+			const text = await log(token);
+			AuditEventListSchema.parse(JSON.parse(text));
+			for (const leaked of [
+				secret,
+				webhookUrl,
+				"hooks.slack.com",
+				setupToken,
+				"stapler",
+				"a guessed password",
+				"owner@initech.example",
+				"milton@initech.example",
+				ownerToken,
+			]) {
+				expect(text).not.toContain(leaked);
+			}
+		}
 	});
 });

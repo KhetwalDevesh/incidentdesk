@@ -6,6 +6,7 @@ import type { TenantId } from "../src/domain/shared/identity";
 import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAccountRepository";
 import { PostgresAccountRepository } from "../src/repository/accounts/postgresAccountRepository";
 import { runMigrations } from "../src/repository/postgres/migrate";
+import { anAudit, setupAudit } from "./auditEntries";
 
 // Matches docker-compose.yml. CI sets TEST_DATABASE_URL to its own service.
 const TEST_DATABASE_URL =
@@ -65,7 +66,7 @@ describe.each([
 		repository = make();
 		tenant = newTenant();
 		admin = newUser("ada@example.com", { role: "admin", passwordHash: "hash-ada" });
-		await repository.createTenantWithAdmin(tenant, admin);
+		await repository.createTenantWithAdmin(tenant, admin, anAudit(tenant.id, "tenant.created"));
 	});
 
 	it("creates a tenant with its admin, findable by email and by id", async () => {
@@ -78,13 +79,23 @@ describe.each([
 	it("refuses a second signup with the same email, and creates nothing", async () => {
 		const other = newTenant();
 
-		expect(await repository.createTenantWithAdmin(other, newUser("ada@example.com"))).toBe(false);
+		expect(
+			await repository.createTenantWithAdmin(
+				other,
+				newUser("ada@example.com"),
+				anAudit(other.id, "tenant.created"),
+			),
+		).toBe(false);
 		expect((await repository.listUsers(other.id, { limit: 10, offset: 0 })).total).toBe(0);
 	});
 
 	it("hides a user from another tenant", async () => {
 		const other = newTenant();
-		await repository.createTenantWithAdmin(other, newUser("linus@example.com"));
+		await repository.createTenantWithAdmin(
+			other,
+			newUser("linus@example.com"),
+			anAudit(other.id, "tenant.created"),
+		);
 
 		expect(await repository.findUser(other.id, admin.id)).toBeNull();
 	});
@@ -92,52 +103,79 @@ describe.each([
 	it("adds a pending member and lists the tenant's users oldest first", async () => {
 		const grace = newUser("grace@example.com", { createdAt: NOW });
 
-		expect(await repository.addUser(tenant.id, grace, { tokenHash: "t1", expiresAt: LATER })).toBe(
-			true,
-		);
+		expect(
+			await repository.addUser(
+				tenant.id,
+				grace,
+				{ tokenHash: "t1", expiresAt: LATER },
+				anAudit(tenant.id, "member.invited"),
+			),
+		).toBe(true);
 
 		const page = await repository.listUsers(tenant.id, { limit: 1, offset: 1 });
 		expect(page).toEqual({ items: [{ ...grace, tenantId: tenant.id }], total: 2 });
 	});
 
 	it("refuses to add a registered email, and stores no setup token", async () => {
-		const added = await repository.addUser(tenant.id, newUser("ada@example.com"), {
-			tokenHash: "t1",
-			expiresAt: LATER,
-		});
+		const added = await repository.addUser(
+			tenant.id,
+			newUser("ada@example.com"),
+			{
+				tokenHash: "t1",
+				expiresAt: LATER,
+			},
+			anAudit(tenant.id, "member.invited"),
+		);
 
 		expect(added).toBe(false);
-		expect(await repository.redeemSetupToken("t1", NOW, "hash")).toBeNull();
+		expect(await repository.redeemSetupToken("t1", NOW, "hash", setupAudit)).toBeNull();
 	});
 
 	it("redeems a setup token once, setting the password", async () => {
 		const grace = newUser("grace@example.com");
-		await repository.addUser(tenant.id, grace, { tokenHash: "t1", expiresAt: LATER });
+		await repository.addUser(
+			tenant.id,
+			grace,
+			{ tokenHash: "t1", expiresAt: LATER },
+			anAudit(tenant.id, "member.invited"),
+		);
 
-		const redeemed = await repository.redeemSetupToken("t1", NOW, "hash-grace");
+		const redeemed = await repository.redeemSetupToken("t1", NOW, "hash-grace", setupAudit);
 
 		expect(redeemed).toEqual({ ...grace, tenantId: tenant.id, passwordHash: "hash-grace" });
-		expect(await repository.redeemSetupToken("t1", NOW, "hash-again")).toBeNull();
+		expect(await repository.redeemSetupToken("t1", NOW, "hash-again", setupAudit)).toBeNull();
 		expect((await repository.findUser(tenant.id, grace.id))?.passwordHash).toBe("hash-grace");
 	});
 
 	it("refuses an expired setup token", async () => {
-		await repository.addUser(tenant.id, newUser("grace@example.com"), {
-			tokenHash: "t1",
-			expiresAt: NOW,
-		});
+		await repository.addUser(
+			tenant.id,
+			newUser("grace@example.com"),
+			{
+				tokenHash: "t1",
+				expiresAt: NOW,
+			},
+			anAudit(tenant.id, "member.invited"),
+		);
 
-		expect(await repository.redeemSetupToken("t1", NOW, "hash")).toBeNull();
+		expect(await repository.redeemSetupToken("t1", NOW, "hash", setupAudit)).toBeNull();
 	});
 
 	it("lets exactly one of many concurrent redemptions win", async () => {
-		await repository.addUser(tenant.id, newUser("grace@example.com"), {
-			tokenHash: "t1",
-			expiresAt: LATER,
-		});
+		await repository.addUser(
+			tenant.id,
+			newUser("grace@example.com"),
+			{
+				tokenHash: "t1",
+				expiresAt: LATER,
+			},
+			anAudit(tenant.id, "member.invited"),
+		);
 
 		const results = await Promise.all(
-			Array.from({ length: 10 }, (_, n) => repository.redeemSetupToken("t1", NOW, `hash-${n}`)),
+			Array.from({ length: 10 }, (_, n) =>
+				repository.redeemSetupToken("t1", NOW, `hash-${n}`, setupAudit),
+			),
 		);
 
 		expect(results.filter((result) => result !== null)).toHaveLength(1);

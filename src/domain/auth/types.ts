@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import type { LoginRequest, SetupPasswordRequest, SignupRequest } from "../../contract/auth";
 import type { PageQuery } from "../../contract/common";
 import type { AddMemberRequest } from "../../contract/members";
+import type { AuditEntry } from "../audit/types";
 import type { Principal, Role, TenantId } from "../shared/identity";
+import type { RequestContext } from "../shared/request";
 import type { Result } from "../shared/result";
 
 export type Tenant = { id: TenantId; name: string; createdAt: Date };
@@ -33,17 +35,29 @@ export interface AccountRepository {
 		tenantId: TenantId,
 		user: Omit<User, "tenantId">,
 		setupToken: NewSetupToken,
+		// Written only when the user is added.
+		audit: AuditEntry,
 	): Promise<boolean>;
 }
 
 // The only operations that run before the tenant is known. Audit every caller.
 export interface CredentialStore {
 	// Returns false when the email is already registered.
-	createTenantWithAdmin(tenant: Tenant, admin: Omit<User, "tenantId">): Promise<boolean>;
+	createTenantWithAdmin(
+		tenant: Tenant,
+		admin: Omit<User, "tenantId">,
+		audit: AuditEntry,
+	): Promise<boolean>;
 	findUserByEmail(email: string): Promise<User | null>;
 	// Atomically marks an unused, unexpired token as used and sets the password.
 	// Returns null when no token matched, so two racing redemptions cannot both win.
-	redeemSetupToken(tokenHash: string, now: Date, passwordHash: string): Promise<User | null>;
+	// `audit` builds the entry from the redeemed user, whose tenant is unknown until then.
+	redeemSetupToken(
+		tokenHash: string,
+		now: Date,
+		passwordHash: string,
+		audit: (user: User) => AuditEntry,
+	): Promise<User | null>;
 }
 
 export interface PasswordHasher {
@@ -61,9 +75,12 @@ export interface TokenService {
 }
 
 export interface AuthService {
-	signup(input: SignupRequest): Promise<Result<AccessToken>>;
-	login(input: LoginRequest): Promise<Result<AccessToken>>;
-	setupPassword(input: SetupPasswordRequest): Promise<Result<AccessToken>>;
+	signup(input: SignupRequest, context?: RequestContext): Promise<Result<AccessToken>>;
+	login(input: LoginRequest, context?: RequestContext): Promise<Result<AccessToken>>;
+	setupPassword(
+		input: SetupPasswordRequest,
+		context?: RequestContext,
+	): Promise<Result<AccessToken>>;
 	authenticate(token: string): Promise<Principal | null>;
 }
 
@@ -71,5 +88,9 @@ export type MemberInvite = { user: User; setupToken: string; setupTokenExpiresAt
 
 export interface MemberService {
 	list(principal: Principal, page: PageQuery): Promise<Result<UserPage>>;
-	add(principal: Principal, input: AddMemberRequest): Promise<Result<MemberInvite>>;
+	add(
+		principal: Principal,
+		input: AddMemberRequest,
+		context?: RequestContext,
+	): Promise<Result<MemberInvite>>;
 }

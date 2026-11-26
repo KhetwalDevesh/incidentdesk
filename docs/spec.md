@@ -26,7 +26,7 @@ IncidentDesk helps small engineering teams receive alerts, group them into incid
 |---|---|---|
 | 1. Foundation | Rules, contract, CI, golden reference slice | Done |
 | 2. Core | Postgres, real auth, tenants, roles | In progress: Postgres and authentication done |
-| 3. Pipeline | Signed webhooks, queue, grouping, audit log | In progress: alert ingestion and grouping done |
+| 3. Pipeline | Signed webhooks, queue, grouping, audit log | Done |
 | 4. Team flow | On-call, Slack, dashboard, realtime status | Planned |
 | 5. AI | Summaries, severity suggestions, postmortems | Planned |
 | 6. Hardening | Load test, security review, AWS deployment | Planned |

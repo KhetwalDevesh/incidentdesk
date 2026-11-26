@@ -21,6 +21,8 @@ export const alertSourceRoutes = (service: AlertSourceService) =>
 			const parsed = CreateAlertSourceRequestSchema.safeParse(await c.req.json().catch(() => null));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.create(c.get("principal"), parsed.data);
+			const result = await service.create(c.get("principal"), parsed.data, {
+				requestId: c.get("requestId"),
+			});
 			return respond(c, result, (created) => c.json(toCreatedAlertSourceResponse(created), 201));
 		});

@@ -12,6 +12,7 @@ import { InMemoryNotificationChannelRepository } from "../src/repository/notific
 import { PostgresNotificationChannelRepository } from "../src/repository/notifications/postgresNotificationChannelRepository";
 import { runMigrations } from "../src/repository/postgres/migrate";
 import { createNotificationChannelService } from "../src/services/notifications/notificationChannelService";
+import { anAudit } from "./auditEntries";
 
 const TEST_DATABASE_URL =
 	process.env.TEST_DATABASE_URL ??
@@ -82,22 +83,24 @@ describe.each([
 	it("round-trips every field", async () => {
 		const channel = newChannel("#incidents");
 
-		const created = await repository.create(acme, channel);
+		const created = await repository.create(acme, channel, anAudit(acme));
 
 		expect(created).toEqual({ ...channel, tenantId: acme });
 		expect((await repository.list(acme, { limit: 10, offset: 0 })).items).toEqual([created]);
 	});
 
 	it("refuses a duplicate name in the same tenant, but allows it in another", async () => {
-		await repository.create(acme, newChannel("#incidents"));
+		await repository.create(acme, newChannel("#incidents"), anAudit(acme));
 
-		expect(await repository.create(acme, newChannel("#incidents"))).toBeNull();
-		expect(await repository.create(globex, newChannel("#incidents"))).not.toBeNull();
+		expect(await repository.create(acme, newChannel("#incidents"), anAudit(acme))).toBeNull();
+		expect(
+			await repository.create(globex, newChannel("#incidents"), anAudit(globex)),
+		).not.toBeNull();
 	});
 
 	it("lets exactly one of many concurrent same-name creates win", async () => {
 		const results = await Promise.all(
-			Array.from({ length: 10 }, () => repository.create(acme, newChannel("#race"))),
+			Array.from({ length: 10 }, () => repository.create(acme, newChannel("#race"), anAudit(acme))),
 		);
 
 		expect(results.filter((result) => result !== null)).toHaveLength(1);
@@ -106,9 +109,9 @@ describe.each([
 	it("lists only the tenant's channels, oldest first, with a total", async () => {
 		const second = newChannel("#b", new Date("2026-01-02T00:00:00Z"));
 		const first = newChannel("#a", new Date("2026-01-01T00:00:00Z"));
-		await repository.create(acme, second);
-		await repository.create(acme, first);
-		await repository.create(globex, newChannel("#other"));
+		await repository.create(acme, second, anAudit(acme));
+		await repository.create(acme, first, anAudit(acme));
+		await repository.create(globex, newChannel("#other"), anAudit(globex));
 
 		const page = await repository.list(acme, { limit: 1, offset: 0 });
 

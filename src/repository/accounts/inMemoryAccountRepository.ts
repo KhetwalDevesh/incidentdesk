@@ -1,4 +1,5 @@
 import type { PageQuery } from "../../contract/common";
+import type { AuditEntry } from "../../domain/audit/types";
 import type {
 	AccountRepository,
 	CredentialStore,
@@ -8,6 +9,7 @@ import type {
 	UserPage,
 } from "../../domain/auth/types";
 import type { TenantId } from "../../domain/shared/identity";
+import { InMemoryAuditStore } from "../audit/inMemoryAuditStore";
 
 type StoredSetupToken = NewSetupToken & { tenantId: TenantId; userId: string; usedAt: Date | null };
 
@@ -20,14 +22,22 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 	private readonly users = new Map<string, User>();
 	private readonly setupTokens = new Map<string, StoredSetupToken>();
 
+	constructor(readonly audit: InMemoryAuditStore = new InMemoryAuditStore()) {}
+
 	private emailTaken(email: string) {
 		return [...this.users.values()].some((user) => user.email === email);
 	}
 
-	async createTenantWithAdmin(tenant: Tenant, admin: Omit<User, "tenantId">): Promise<boolean> {
+	async createTenantWithAdmin(
+		tenant: Tenant,
+		admin: Omit<User, "tenantId">,
+		audit: AuditEntry,
+	): Promise<boolean> {
 		if (this.emailTaken(admin.email)) return false;
+		this.audit.checkSync([audit]);
 		this.tenants.set(tenant.id, tenant);
 		this.users.set(admin.id, { ...admin, tenantId: tenant.id });
+		this.audit.appendSync([audit]);
 		return true;
 	}
 
@@ -35,15 +45,23 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 		return [...this.users.values()].find((user) => user.email === email) ?? null;
 	}
 
-	async redeemSetupToken(tokenHash: string, now: Date, passwordHash: string): Promise<User | null> {
+	async redeemSetupToken(
+		tokenHash: string,
+		now: Date,
+		passwordHash: string,
+		audit: (user: User) => AuditEntry,
+	): Promise<User | null> {
 		const token = this.setupTokens.get(tokenHash);
 		if (!token || token.usedAt !== null || token.expiresAt <= now) return null;
 		const user = this.users.get(token.userId);
 		if (user?.tenantId !== token.tenantId) return null;
 
-		this.setupTokens.set(tokenHash, { ...token, usedAt: now });
 		const updated = { ...user, passwordHash };
+		const entry = audit(updated);
+		this.audit.checkSync([entry]);
+		this.setupTokens.set(tokenHash, { ...token, usedAt: now });
 		this.users.set(user.id, updated);
+		this.audit.appendSync([entry]);
 		return updated;
 	}
 
@@ -63,8 +81,10 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 		tenantId: TenantId,
 		user: Omit<User, "tenantId">,
 		setupToken: NewSetupToken,
+		audit: AuditEntry,
 	): Promise<boolean> {
 		if (this.emailTaken(user.email)) return false;
+		this.audit.checkSync([audit]);
 		this.users.set(user.id, { ...user, tenantId });
 		this.setupTokens.set(setupToken.tokenHash, {
 			...setupToken,
@@ -72,6 +92,7 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 			userId: user.id,
 			usedAt: null,
 		});
+		this.audit.appendSync([audit]);
 		return true;
 	}
 }

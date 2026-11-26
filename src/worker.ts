@@ -6,11 +6,13 @@ import { buildWorker } from "./containers";
 // alerts back onto the queue. Spec: docs/features/alert-queue-sqs.md.
 // Run several for throughput: SQS hides a received message from other workers.
 const SWEEP_INTERVAL_MS = 30_000;
+// Audit entries past the 90-day retention. Spec: docs/features/audit-log.md.
+const AUDIT_PURGE_INTERVAL_MS = 60 * 60 * 1000;
 const ERROR_BACKOFF_MS = 5000;
 
 const config = loadConfig();
 // Ids only: alert content is untrusted and stays out of logs.
-const { processor, pool } = buildWorker(config, (subject, error) =>
+const { processor, purgeAudit, pool } = buildWorker(config, (subject, error) =>
 	console.error(`${subject} failed:`, error instanceof Error ? error.message : "unknown error"),
 );
 pool.on("error", (error) => console.error("Idle Postgres client error:", error.message));
@@ -38,6 +40,7 @@ console.log("IncidentDesk alert worker started");
 await Promise.all([
 	loop("Alert batch", () => processor.processMessages(), 0),
 	loop("Alert sweep", () => processor.sweep(), SWEEP_INTERVAL_MS),
+	loop("Audit purge", purgeAudit, AUDIT_PURGE_INTERVAL_MS),
 ]);
 // The current batch finished above, so nothing is left half done. Messages not reached
 // become visible again after the visibility timeout.

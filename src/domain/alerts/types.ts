@@ -8,8 +8,10 @@ import type {
 } from "../../contract/alerts";
 import type { PageQuery } from "../../contract/common";
 import type { IncidentId, IncidentSeverity } from "../../contract/incidents";
+import type { AuditEntry } from "../audit/types";
 import type { Incident } from "../incidents/types";
 import type { Principal, TenantId } from "../shared/identity";
+import type { RequestContext } from "../shared/request";
 import type { Result } from "../shared/result";
 
 // Spec: docs/features/alert-ingestion.md
@@ -61,7 +63,12 @@ export type AlertRef = { tenantId: TenantId; alertId: string };
 // Tenant-scoped. Every method takes tenantId first, like every repository.
 export interface AlertSourceRepository {
 	// Returns null when the tenant already has a source with this name.
-	create(tenantId: TenantId, source: Omit<AlertSource, "tenantId">): Promise<AlertSource | null>;
+	create(
+		tenantId: TenantId,
+		source: Omit<AlertSource, "tenantId">,
+		// Written only when the source is created.
+		audit: AuditEntry,
+	): Promise<AlertSource | null>;
 	list(tenantId: TenantId, page: PageQuery): Promise<AlertSourcePage>;
 }
 
@@ -86,12 +93,14 @@ export interface AlertRepository {
 	//   or inserts the candidate when there is none;
 	// - without one, attaches only when such an incident exists.
 	// Attaching increments alertCount. Returns null when the alert is no longer pending,
-	// so an alert is never grouped twice.
+	// so an alert is never grouped twice. `audit` builds the entries for the outcome, which
+	// are written in the same transaction.
 	complete(
 		tenantId: TenantId,
 		alertId: string,
 		candidate: Omit<Incident, "tenantId"> | null,
 		processedAt: Date,
+		audit: (outcome: GroupingOutcome) => AuditEntry[],
 	): Promise<{ incidentId: IncidentId | null } | null>;
 	// Records a failed attempt. A null retryAt marks the alert failed for good.
 	fail(
@@ -102,6 +111,10 @@ export interface AlertRepository {
 		now: Date,
 	): Promise<void>;
 }
+
+// What complete() did: attached to, or opened, an incident. incidentId is null when a
+// resolved alert found no unresolved incident to attach to.
+export type GroupingOutcome = { incidentId: IncidentId | null; opened: boolean };
 
 // Runs across every tenant: the sweeper serves them all. Audit every caller.
 export interface AlertOutbox {
@@ -140,6 +153,7 @@ export interface AlertSourceService {
 	create(
 		principal: Principal,
 		input: CreateAlertSourceRequest,
+		context?: RequestContext,
 	): Promise<Result<CreatedAlertSource>>;
 	list(principal: Principal, page: PageQuery): Promise<Result<AlertSourcePage>>;
 }

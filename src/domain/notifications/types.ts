@@ -4,7 +4,9 @@ import type {
 	CreateNotificationChannelRequest,
 	NOTIFICATION_CHANNEL_KINDS,
 } from "../../contract/notificationChannels";
+import type { AuditEntry } from "../audit/types";
 import type { Principal, TenantId } from "../shared/identity";
+import type { RequestContext } from "../shared/request";
 import type { Result } from "../shared/result";
 
 export type NotificationChannel = {
@@ -28,6 +30,8 @@ export interface NotificationChannelRepository {
 	create(
 		tenantId: TenantId,
 		channel: Omit<NotificationChannel, "tenantId">,
+		// Written only when the channel is created.
+		audit: AuditEntry,
 	): Promise<NotificationChannel | null>;
 	list(tenantId: TenantId, page: PageQuery): Promise<NotificationChannelPage>;
 }
@@ -48,6 +52,7 @@ export interface NotificationChannelService {
 	create(
 		principal: Principal,
 		input: CreateNotificationChannelRequest,
+		context?: RequestContext,
 	): Promise<Result<NotificationChannel>>;
 	list(principal: Principal, page: PageQuery): Promise<Result<NotificationChannelPage>>;
 }

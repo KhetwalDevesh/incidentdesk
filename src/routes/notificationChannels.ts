@@ -23,6 +23,8 @@ export const notificationChannelRoutes = (service: NotificationChannelService) =
 			);
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.create(c.get("principal"), parsed.data);
+			const result = await service.create(c.get("principal"), parsed.data, {
+				requestId: c.get("requestId"),
+			});
 			return respond(c, result, (channel) => c.json(toNotificationChannelResponse(channel), 201));
 		});

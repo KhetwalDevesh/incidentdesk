@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { anAudit, groupingAudit } from "../../../tests/auditEntries";
 import { InMemoryAlertQueue } from "../../adapters/inMemoryAlertQueue";
 import type { IncidentId } from "../../contract/incidents";
 import type { Alert, AlertRepository } from "../../domain/alerts/types";
@@ -153,7 +154,13 @@ describe("alertProcessor grouping", () => {
 		await send();
 		await processor.processMessages();
 		const [opened] = await allIncidents();
-		await incidents.update(tenant, opened?.id as IncidentId, "open", { status: "acknowledged" });
+		await incidents.update(
+			tenant,
+			opened?.id as IncidentId,
+			"open",
+			{ status: "acknowledged" },
+			anAudit(tenant, "incident.acknowledged"),
+		);
 
 		await send();
 		await processor.processMessages();
@@ -166,7 +173,13 @@ describe("alertProcessor grouping", () => {
 		await send();
 		await processor.processMessages();
 		const [first] = await allIncidents();
-		await incidents.update(tenant, first?.id as IncidentId, "open", { status: "resolved" });
+		await incidents.update(
+			tenant,
+			first?.id as IncidentId,
+			"open",
+			{ status: "resolved" },
+			anAudit(tenant, "incident.acknowledged"),
+		);
 
 		await send();
 		await processor.processMessages();
@@ -408,8 +421,8 @@ describe("alertProcessor concurrency", () => {
 		const alert = await store();
 		const started = await alerts.startAttempt(tenant, alert.id, start);
 
-		const first = await alerts.complete(tenant, alert.id, null, start);
-		const second = await alerts.complete(tenant, alert.id, null, start);
+		const first = await alerts.complete(tenant, alert.id, null, start, groupingAudit(tenant));
+		const second = await alerts.complete(tenant, alert.id, null, start, groupingAudit(tenant));
 
 		expect(started?.id).toBe(alert.id);
 		expect(first).toEqual({ incidentId: null });
