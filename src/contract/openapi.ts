@@ -31,8 +31,10 @@ import {
 } from "./members";
 import {
 	CreateNotificationChannelRequestSchema,
+	NotificationChannelIdSchema,
 	NotificationChannelListSchema,
 	NotificationChannelSchema,
+	NotificationDeliveryListSchema,
 } from "./notificationChannels";
 
 const registry = new OpenAPIRegistry();
@@ -335,7 +337,22 @@ registry.registerPath({
 		...authErrors,
 		403: problem("Only admins can add notification channels"),
 		409: problem("The tenant already has a channel with this name"),
-		422: problem("Request body failed validation"),
+		422: problem("Request body failed validation, or the webhook URL's origin is not allowed"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/notification-channels/{id}/deliveries",
+	summary: "List a notification channel's deliveries, newest first",
+	security,
+	request: { params: z.object({ id: NotificationChannelIdSchema }), query: PageQuerySchema },
+	responses: {
+		200: json(NotificationDeliveryListSchema, "A page of deliveries"),
+		...authErrors,
+		403: problem("Only admins can list deliveries"),
+		404: problem("No such channel in the caller's tenant"),
+		422: problem("Path or query failed validation"),
 	},
 });
 

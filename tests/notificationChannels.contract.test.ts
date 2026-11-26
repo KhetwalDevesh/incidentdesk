@@ -43,10 +43,27 @@ describe("notification channels contract", () => {
 		});
 	});
 
-	it("accepts any URL, including plain http and internal hosts", async () => {
+	// Spec: docs/features/slack-delivery.md. Replaces the earlier "any URL" decision.
+	it.each([
+		"http://localhost:9000/hook",
+		"http://169.254.169.254/latest/meta-data",
+		"http://hooks.slack.com/services/T000/B000/abcdWXYZ",
+		"https://hooks.slack.com.evil.example/services/x",
+		"https://user:pass@hooks.slack.com/services/x",
+		"https://hooks.slack.com:8443/services/x",
+	])("refuses a webhook URL whose origin is not allowed: %s", async (webhookUrl) => {
+		const res = await app.request(PATH, authed("acme-admin", { name: "internal", webhookUrl }));
+
+		expect(res.status).toBe(422);
+		expect(ProblemSchema.parse(await res.json()).errors).toEqual([
+			{ path: "webhookUrl", message: "The webhook URL's host is not allowed" },
+		]);
+	});
+
+	it("accepts an origin added to the allowlist, such as the dev receiver", async () => {
 		const res = await app.request(
 			PATH,
-			authed("acme-admin", { name: "internal", webhookUrl: "http://localhost:9000/hook" }),
+			authed("acme-admin", { name: "dev", webhookUrl: "http://127.0.0.1:4000/hook" }),
 		);
 
 		expect(res.status).toBe(201);

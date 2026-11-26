@@ -63,7 +63,7 @@ A tenant can have several channels, for example `sev1` to `#oncall` and everythi
 ## Security
 
 - The webhook URL is a secret, because anyone holding it can post to the channel. It is encrypted at rest, never returned, never logged.
-- Decided by the user: any webhook URL is accepted, with no host, scheme or address restriction. `http` is allowed, and so are private, loopback and cloud metadata addresses. Accepted risk: an admin can make the server send requests to internal addresses (SSRF), and an `http` URL is sent unencrypted.
+- Superseded by `docs/features/slack-delivery.md`: webhook URLs must now match an origin allowlist, checked at creation and at send time. Originally decided by the user: any webhook URL is accepted, with no host, scheme or address restriction. `http` is allowed, and so are private, loopback and cloud metadata addresses. Accepted risk: an admin can make the server send requests to internal addresses (SSRF), and an `http` URL is sent unencrypted.
 - `tenantId` comes from the principal. Isolation tests cover list, create and delete across tenants.
 - The encryption key comes from config and a secret manager in production. Losing it makes stored URLs unreadable, so admins would re-enter them.
 
@@ -76,8 +76,8 @@ A tenant can have several channels, for example `sev1` to `#oncall` and everythi
 ## Open questions
 
 1. Key rotation: how to re-encrypt stored URLs under a new key.
-2. Which events notify: opened only, or also acknowledged and resolved.
-3. Whether a channel is disabled after repeated delivery failures.
+2. Answered in `slack-delivery.md`: opened, acknowledged and resolved all notify.
+3. Answered in `slack-delivery.md`: channels are never disabled automatically.
 
 ## Done when
 
@@ -87,6 +87,6 @@ A tenant can have several channels, for example `sev1` to `#oncall` and everythi
 - [x] Webhook URLs encrypted at rest, proven by a repository test that reads the raw column (`tests/notificationChannelRepository.parity.test.ts`)
 - [x] A ciphertext moved to another tenant or channel fails to decrypt (same test, and `src/adapters/aesGcmSecretBox.test.ts`)
 - [x] Tenant isolation tests added
-- [ ] An opened incident posts to the tenant's channel through the queue
+- [x] An opened incident posts to the tenant's channel through the queue (`docs/features/slack-delivery.md`)
 - [x] Contract regenerated, with no breaking change (no removed lines)
-- [ ] `pnpm check` passes
+- [x] `pnpm check` passes

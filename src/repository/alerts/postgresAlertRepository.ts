@@ -11,9 +11,11 @@ import type {
 } from "../../domain/alerts/types";
 import type { AuditEntry } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
+import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries } from "../audit/postgresAuditRepository";
 import { INCIDENT_COLUMNS } from "../incidents/postgresIncidentRepository";
+import { insertDeliveries } from "../notifications/postgresNotificationDeliveryRepository";
 
 const COLUMNS =
 	"id, tenant_id, source_id, dedup_key, title, severity, alert_status, details, received_at, state, attempts, next_attempt_at, last_error, incident_id, processed_at, sent_at";
@@ -170,6 +172,7 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 		candidate: Omit<Incident, "tenantId"> | null,
 		processedAt: Date,
 		audit: (outcome: GroupingOutcome) => AuditEntry[],
+		notice?: (outcome: GroupingOutcome) => DeliveryNotice | null,
 	): Promise<{ incidentId: IncidentId | null } | null> {
 		return this.transaction(async (client) => {
 			// Locks the alert, so a second worker holding an expired lease waits, then sees it processed.
@@ -214,6 +217,8 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 				[tenantId, alertId, incidentId, processedAt],
 			);
 			await insertAuditEntries(client, audit({ incidentId, opened }));
+			const deliveries = notice?.({ incidentId, opened });
+			if (deliveries) await insertDeliveries(client, tenantId, deliveries);
 			return { incidentId };
 		});
 	}

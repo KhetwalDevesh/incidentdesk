@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { describe, expect, it } from "vitest";
-import { createSqsAlertQueue } from "../src/adapters/sqsAlertQueue";
-import type { AlertQueueMessage } from "../src/domain/alerts/types";
+import { createSqsQueue } from "../src/adapters/sqsQueue";
+import { type AlertQueueMessage, alertQueueBody } from "../src/domain/alerts/types";
 import type { TenantId } from "../src/domain/shared/identity";
 
 // Runs only through `pnpm test:sqs`, against a real SQS queue that no worker reads.
@@ -15,7 +15,7 @@ if (!queueUrl || !region) {
 	);
 }
 
-const queue = createSqsAlertQueue(new SQSClient({ region }), queueUrl);
+const queue = createSqsQueue(new SQSClient({ region }), queueUrl, alertQueueBody);
 const tenantId = randomUUID() as TenantId;
 
 // SQS is eventually consistent and gives no ordering, so wait up to `withinMs` for our message.

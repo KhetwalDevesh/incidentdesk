@@ -60,7 +60,7 @@ describe.each([
 	beforeEach(async () => {
 		if (name === "postgres") {
 			await pool.query(
-				"TRUNCATE alerts, alert_sources, notification_channels, password_setup_tokens, users, tenants",
+				"TRUNCATE alerts, alert_sources, notification_deliveries, notification_channels, password_setup_tokens, users, tenants",
 			);
 		}
 		repository = make();

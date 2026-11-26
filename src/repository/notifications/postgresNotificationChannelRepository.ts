@@ -80,4 +80,12 @@ export class PostgresNotificationChannelRepository implements NotificationChanne
 		]);
 		return { items: page.rows.map(toChannel), total: Number(count.rows[0]?.total ?? 0) };
 	}
+
+	async findById(tenantId: TenantId, id: string): Promise<NotificationChannel | null> {
+		const { rows } = await this.pool.query<ChannelRow>(
+			`SELECT ${COLUMNS} FROM notification_channels WHERE tenant_id = $1 AND id = $2`,
+			[tenantId, id],
+		);
+		return rows[0] ? toChannel(rows[0]) : null;
+	}
 }

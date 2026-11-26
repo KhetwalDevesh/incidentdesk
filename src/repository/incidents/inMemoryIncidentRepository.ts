@@ -2,24 +2,31 @@ import type { PageQuery } from "../../contract/common";
 import type { IncidentId } from "../../contract/incidents";
 import type { AuditEntry } from "../../domain/audit/types";
 import type { Incident, IncidentChanges, IncidentRepository } from "../../domain/incidents/types";
+import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { InMemoryAuditStore } from "../audit/inMemoryAuditStore";
+import { InMemoryNotificationDeliveryRepository } from "../notifications/inMemoryNotificationDeliveryRepository";
 
 export class InMemoryIncidentRepository implements IncidentRepository {
 	private readonly incidents = new Map<IncidentId, Incident>();
 
-	// Shared with the other in-memory repositories, as Postgres shares audit_events.
-	constructor(readonly audit: InMemoryAuditStore = new InMemoryAuditStore()) {}
+	// Shared with the other in-memory repositories, as Postgres shares its tables.
+	constructor(
+		readonly audit: InMemoryAuditStore = new InMemoryAuditStore(),
+		readonly deliveries: InMemoryNotificationDeliveryRepository = new InMemoryNotificationDeliveryRepository(),
+	) {}
 
 	async create(
 		tenantId: TenantId,
 		incident: Omit<Incident, "tenantId">,
 		audit: AuditEntry,
+		notice?: DeliveryNotice,
 	): Promise<Incident> {
 		this.audit.checkSync([audit]);
 		const stored = { ...incident, tenantId };
 		this.incidents.set(stored.id, stored);
 		this.audit.appendSync([audit]);
+		if (notice) this.deliveries.insertSync(tenantId, notice);
 		return stored;
 	}
 
@@ -66,6 +73,7 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		expectedStatus: Incident["status"],
 		changes: IncidentChanges,
 		audit: AuditEntry,
+		notice?: DeliveryNotice,
 	): Promise<Incident | null> {
 		const current = this.incidents.get(id);
 		if (current?.tenantId !== tenantId || current.status !== expectedStatus) return null;
@@ -73,6 +81,7 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		const updated = { ...current, ...changes };
 		this.incidents.set(id, updated);
 		this.audit.appendSync([audit]);
+		if (notice) this.deliveries.insertSync(tenantId, notice);
 		return updated;
 	}
 }

@@ -8,8 +8,10 @@ import type {
 	IncidentPage,
 	IncidentRepository,
 } from "../../domain/incidents/types";
+import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
+import { insertDeliveries } from "../notifications/postgresNotificationDeliveryRepository";
 
 export const INCIDENT_COLUMNS =
 	"id, tenant_id, title, severity, status, created_at, created_by, acknowledged_at, acknowledged_by, resolved_at, resolved_by, alert_source_id, dedup_key, alert_count, last_alert_at";
@@ -67,6 +69,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 		tenantId: TenantId,
 		incident: Omit<Incident, "tenantId">,
 		audit: AuditEntry,
+		notice?: DeliveryNotice,
 	): Promise<Incident> {
 		return inTransaction(this.pool, async (client) => {
 			const { rows } = await client.query<IncidentRow>(
@@ -90,6 +93,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 				],
 			);
 			await insertAuditEntries(client, [audit]);
+			if (notice) await insertDeliveries(client, tenantId, notice);
 			return toIncident(rows[0] as IncidentRow);
 		});
 	}
@@ -124,6 +128,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 		expectedStatus: Incident["status"],
 		changes: IncidentChanges,
 		audit: AuditEntry,
+		notice?: DeliveryNotice,
 	): Promise<Incident | null> {
 		const keys = CHANGE_KEYS.filter((key) => changes[key] !== undefined);
 		const assignments = keys.map((key, index) => `${CHANGE_COLUMNS[key]} = $${index + 4}`);
@@ -135,6 +140,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			);
 			if (!rows[0]) return null;
 			await insertAuditEntries(client, [audit]);
+			if (notice) await insertDeliveries(client, tenantId, notice);
 			return toIncident(rows[0]);
 		});
 	}

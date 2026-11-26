@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { anAudit, groupingAudit } from "../../../tests/auditEntries";
-import { InMemoryAlertQueue } from "../../adapters/inMemoryAlertQueue";
+import { InMemoryQueue } from "../../adapters/inMemoryQueue";
 import type { IncidentId } from "../../contract/incidents";
-import type { Alert, AlertRepository } from "../../domain/alerts/types";
+import type { Alert, AlertRef, AlertRepository } from "../../domain/alerts/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { InMemoryAlertRepository } from "../../repository/alerts/inMemoryAlertRepository";
 import { InMemoryIncidentRepository } from "../../repository/incidents/inMemoryIncidentRepository";
@@ -25,7 +25,7 @@ const setup = () => {
 	const now = () => new Date(clock);
 	const incidents = new InMemoryIncidentRepository();
 	const alerts = new InMemoryAlertRepository(incidents);
-	const queue = new InMemoryAlertQueue({ now, visibilityTimeoutMs: VISIBILITY_MS });
+	const queue = new InMemoryQueue<AlertRef>({ now, visibilityTimeoutMs: VISIBILITY_MS });
 	const errors: string[] = [];
 	const processorWith = (repository: AlertRepository = alerts, batchSize = 10) =>
 		createAlertProcessor({

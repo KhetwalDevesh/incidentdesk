@@ -1,6 +1,6 @@
 # Slack delivery
 
-Status: Approved
+Status: Done
 
 Phase 4, core flow step 4: "The on-call engineer gets a Slack alert." Builds on `docs/features/slack-notifications.md`, which added the encrypted notification channels and left delivery open. Answers that spec's open questions 2 (which events notify) and 3 (no automatic disabling).
 
@@ -114,11 +114,12 @@ Migration `0011_create_notification_deliveries.sql`:
 
 Code:
 
-- **Ports:** `NotificationDeliveryRepository` (tenant-first: `startAttempt`, `markSent`, `complete`, `fail`, `listForChannel`); `DeliveryOutbox.claimOverdue` (cross-tenant); `WebhookSender` with an HTTP adapter (timeout, `redirect: "error"`).
+- **Ports:** `NotificationDeliveryRepository` (tenant-first: `listUnsent`, `markSent`, `startAttempt`, `deliver`, `retry`, `fail`, `listForChannel`); `DeliveryOutbox.claimOverdue` and `DeliveryPurger` (cross-tenant); `WebhookSender` with a fetch adapter (5 s timeout, `redirect: "manual"`, so a 3xx comes back as a status and is never followed); `DeliveryDispatcher`, which sends the queue messages after the change commits.
+- **Leases:** `startAttempt` holds a delivery until its lease ends, so a duplicate message arriving mid-send waits instead of posting a second time.
 - **Queue:** the SQS adapter and its in-memory twin become generic over the message, so alerts and notifications share them.
 - **Writing deliveries:** `IncidentRepository.create` and `update`, and `AlertRepository.complete`, insert the delivery rows in the transaction they already share with the audit entry. Channel matching is a single `INSERT … SELECT` over the tenant's enabled channels.
 - **Worker:** a second consumer loop, a second sweeper and a delivery purge.
-- **Config:** `NOTIFICATION_QUEUE_URL` (API and worker), `NOTIFICATION_WEBHOOK_ORIGINS` (comma-separated, default `https://hooks.slack.com`), and `NOTIFICATION_ENCRYPTION_KEY` in the worker too. `.env.example` adds `http://127.0.0.1:4000` for the dev receiver.
+- **Config:** `NOTIFICATION_QUEUE_URL` (API and worker; required, so an existing `.env` needs it), `NOTIFICATION_WEBHOOK_ORIGINS` (comma-separated, default `https://hooks.slack.com`), and `NOTIFICATION_ENCRYPTION_KEY` in the worker too. `.env.example` adds `http://127.0.0.1:4000` for the dev receiver.
 - **Setup:** `pnpm sqs:setup --name incidentdesk-notifications-<you>` creates the queue and its DLQ. The existing IAM policy already covers `incidentdesk-*`.
 
 ## Edge cases and failures
@@ -163,13 +164,13 @@ Code:
 
 ## Done when
 
-- [ ] Opening (by a person or an alert), acknowledging and resolving an incident writes one delivery per enabled channel meeting its minimum severity, in the change's transaction (`tests/notificationDeliveryRepository.parity.test.ts`, `tests/slackDelivery.contract.test.ts`)
-- [ ] The worker posts the escaped message and marks it delivered. It retries 5xx, 408 and timeouts with backoff, fails after 5 attempts, and fails any other 4xx at once. A 429 waits `Retry-After` (capped at 10 minutes) without counting, and the delivery fails 1 hour after creation (`src/services/notifications/deliveryProcessor.test.ts`)
-- [ ] A member removed before the send is still named by email in the message, and a finished delivery row holds no email (`deliveryProcessor.test.ts`, `tests/notificationDeliveryRepository.parity.test.ts`, `tests/security.test.ts`)
-- [ ] A duplicate message posts once, and the sweeper re-sends only lost messages (`deliveryProcessor.test.ts`)
-- [ ] A non-allowlisted origin is refused at channel creation (422) and at send time (`host_not_allowed`), and redirects are not followed (`tests/security.test.ts`, "slack delivery")
-- [ ] The webhook URL appears in no queue message, row, response or log, and a title cannot inject a mention or link (`tests/security.test.ts`)
-- [ ] Admins list a channel's deliveries; viewers and responders get 403; another tenant's channel gets 404 (`tests/slackDelivery.contract.test.ts`, `tests/security.test.ts`)
-- [ ] A manual run through real SQS posts opened, acknowledged and resolved messages to the dev receiver
-- [ ] Contract regenerated: additive, apart from the decided 422 for disallowed webhook origins
-- [ ] `pnpm check` passes
+- [x] Opening (by a person or an alert), acknowledging and resolving an incident writes one delivery per enabled channel meeting its minimum severity, in the change's transaction (`tests/notificationDeliveryRepository.parity.test.ts`, `tests/slackDelivery.contract.test.ts`)
+- [x] The worker posts the escaped message and marks it delivered. It retries 5xx, 408 and timeouts with backoff, fails after 5 attempts, and fails any other 4xx at once. A 429 waits `Retry-After` (capped at 10 minutes) without counting, and the delivery fails 1 hour after creation (`src/services/notifications/deliveryProcessor.test.ts`)
+- [x] A member removed before the send is still named by email in the message, and a finished delivery row holds no email (`deliveryProcessor.test.ts`, `tests/notificationDeliveryRepository.parity.test.ts`, `tests/security.test.ts`)
+- [x] A duplicate message posts once, and the sweeper re-sends only lost messages (`deliveryProcessor.test.ts`)
+- [x] A non-allowlisted origin is refused at channel creation (422) and at send time (`host_not_allowed`), and redirects are not followed (`tests/security.test.ts`, "slack delivery")
+- [x] The webhook URL appears in no queue message, row, response or log, and a title cannot inject a mention or link (`tests/security.test.ts`)
+- [x] Admins list a channel's deliveries; viewers and responders get 403; another tenant's channel gets 404 (`tests/slackDelivery.contract.test.ts`, `tests/security.test.ts`)
+- [x] A manual run through real SQS (`ap-southeast-2`) posts opened, acknowledged and resolved messages to the dev receiver. Also seen in that run: an alert-opened incident posts once for three alerts, a 404 fails as `rejected`, a 500 then 200 delivers on attempt 2 about 5 s later, a metadata-IP channel gets 422, stored rows hold no email, and a 302 from the real fetch sender is not followed
+- [x] Contract regenerated: additive, apart from the decided 422 for disallowed webhook origins
+- [x] `pnpm check` passes (456 tests)

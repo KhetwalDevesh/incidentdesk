@@ -4,12 +4,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createAesGcmSecretBox } from "../src/adapters/aesGcmSecretBox";
 import {
 	channelSecretContext,
+	createWebhookPolicy,
 	type NotificationChannel,
 	type NotificationChannelRepository,
 } from "../src/domain/notifications/types";
 import type { Principal, TenantId } from "../src/domain/shared/identity";
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { PostgresNotificationChannelRepository } from "../src/repository/notifications/postgresNotificationChannelRepository";
+import { PostgresNotificationDeliveryRepository } from "../src/repository/notifications/postgresNotificationDeliveryRepository";
 import { runMigrations } from "../src/repository/postgres/migrate";
 import { createNotificationChannelService } from "../src/services/notifications/notificationChannelService";
 import { anAudit } from "./auditEntries";
@@ -128,10 +130,12 @@ describe("notification channel storage in postgres", () => {
 	it("stores only ciphertext, which opens only under its own tenant and channel", async () => {
 		const tenantId = await newTenant();
 		const principal: Principal = { tenantId, userId: "user-1", role: "admin" };
-		const service = createNotificationChannelService(
-			new PostgresNotificationChannelRepository(pool),
-			box,
-		);
+		const service = createNotificationChannelService({
+			channels: new PostgresNotificationChannelRepository(pool),
+			deliveries: new PostgresNotificationDeliveryRepository(pool),
+			secrets: box,
+			policy: createWebhookPolicy(["https://hooks.slack.com"]),
+		});
 
 		const created = await service.create(principal, {
 			name: "#incidents",

@@ -560,6 +560,84 @@ components:
         - name
         - webhookUrl
       additionalProperties: false
+    NotificationDeliveryList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationDelivery"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    NotificationDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        event:
+          type: string
+          enum:
+            - incident.opened
+            - incident.acknowledged
+            - incident.resolved
+        incidentId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+            - pending
+            - delivered
+            - failed
+        attempts:
+          type: integer
+        failureReason:
+          type:
+            - string
+            - "null"
+          enum:
+            - rejected
+            - unavailable
+            - host_not_allowed
+            - null
+        lastStatus:
+          type:
+            - integer
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        deliveredAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - id
+        - event
+        - incidentId
+        - state
+        - attempts
+        - failureReason
+        - lastStatus
+        - createdAt
+        - deliveredAt
+      additionalProperties: false
+      description: One message to one channel. failureReason is rejected (a 4xx other
+        than 429, or a redirect), unavailable (5xx, 429, timeout or network
+        error until the last attempt) or host_not_allowed. lastStatus is the
+        last HTTP status Slack answered with, or null if none.
     AlertSourceList:
       type: object
       properties:
@@ -1575,7 +1653,67 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "422":
-          description: Request body failed validation
+          description: Request body failed validation, or the webhook URL's origin is not
+            allowed
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/notification-channels/{id}/deliveries:
+    get:
+      summary: List a notification channel's deliveries, newest first
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of deliveries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationDeliveryList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can list deliveries
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such channel in the caller's tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Path or query failed validation
           content:
             application/problem+json:
               schema:

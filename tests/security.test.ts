@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sign } from "hono/jwt";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createAesGcmSecretBox } from "../src/adapters/aesGcmSecretBox";
 import {
 	AlertAcceptedSchema,
 	AlertListSchema,
@@ -11,8 +12,13 @@ import { AccessTokenSchema } from "../src/contract/auth";
 import { ProblemSchema } from "../src/contract/common";
 import { IncidentListSchema, IncidentSchema } from "../src/contract/incidents";
 import { MemberInviteSchema, MemberListSchema } from "../src/contract/members";
-import { NotificationChannelListSchema } from "../src/contract/notificationChannels";
+import {
+	NotificationChannelListSchema,
+	NotificationChannelSchema,
+} from "../src/contract/notificationChannels";
+import { channelSecretContext } from "../src/domain/notifications/types";
 import type { TenantId } from "../src/domain/shared/identity";
+import { anAudit } from "./auditEntries";
 import {
 	addAlertSource,
 	authed,
@@ -21,6 +27,7 @@ import {
 	post,
 	signedAlert,
 	signup,
+	TEST_ENCRYPTION_KEY,
 	TEST_JWT_SECRET,
 } from "./helpers";
 
@@ -652,5 +659,170 @@ describe("member management changes", () => {
 			await (await app.request("/v1/members", authed(globex))).json(),
 		);
 		expect(globexMembers.items.find((m) => m.id === own.id)?.role).toBe("viewer");
+	});
+});
+
+// Spec: docs/features/slack-delivery.md
+describe("slack delivery", () => {
+	const SECRET_URL = "https://hooks.slack.com/services/T000/B000/s3cretTokenPart";
+	let system: ReturnType<typeof buildTestSystem>;
+	let acme: string;
+
+	beforeEach(async () => {
+		system = buildTestSystem();
+		acme = await signup(system.app, "ada@acme.example", "Acme");
+	});
+
+	const addChannel = async (token: string, webhookUrl = SECRET_URL) => {
+		const res = await system.app.request(
+			"/v1/notification-channels",
+			authed(token, { name: "#incidents", webhookUrl }),
+		);
+		return NotificationChannelSchema.parse(await res.json()).id;
+	};
+
+	const work = async () => {
+		while ((await system.deliveryProcessor.processMessages()) > 0) {
+			// Until the queue is empty.
+		}
+	};
+
+	it("refuses an internal or non-allowlisted webhook at channel creation", async () => {
+		for (const webhookUrl of [
+			"http://169.254.169.254/latest/meta-data/iam",
+			"http://localhost:5432",
+			"https://hooks.slack.com@evil.example/x",
+			"file:///etc/passwd",
+		]) {
+			const res = await system.app.request(
+				"/v1/notification-channels",
+				authed(acme, { name: "#x", webhookUrl }),
+			);
+			expect(res.status).toBe(422);
+		}
+	});
+
+	it("refuses a stored channel outside the allowlist at send time, without calling it", async () => {
+		// Created before the allowlist existed, as the old API allowed: stored directly.
+		const tenantId = (await system.accounts.findUserByEmail("ada@acme.example"))?.tenantId;
+		if (!tenantId) throw new Error("no tenant");
+		const id = randomUUID();
+		await system.channels.create(
+			tenantId,
+			{
+				id,
+				kind: "slack_webhook",
+				name: "#legacy",
+				targetCiphertext: createAesGcmSecretBox(TEST_ENCRYPTION_KEY).seal(
+					"http://169.254.169.254/latest/meta-data/iam",
+					channelSecretContext(tenantId, id),
+				),
+				targetHint: "/iam",
+				minSeverity: "sev4",
+				enabled: true,
+				createdAt: new Date(),
+			},
+			anAudit(tenantId, "notification_channel.created"),
+		);
+
+		await system.app.request("/v1/incidents", authed(acme, validBody));
+		await work();
+
+		expect(system.sender.posts).toEqual([]);
+		expect(system.deliveries.allSync()).toMatchObject([
+			{ state: "failed", failureReason: "host_not_allowed" },
+		]);
+	});
+
+	it("keeps the webhook URL out of queue messages, delivery rows, responses and error reports", async () => {
+		const channel = await addChannel(acme);
+		await system.app.request("/v1/incidents", authed(acme, validBody));
+		const queued = [...system.notificationQueue.bodies];
+		system.sender.answers = [{ kind: "error", error: "network error" }];
+		await work();
+		const listed = await system.app.request(
+			`/v1/notification-channels/${channel}/deliveries`,
+			authed(acme),
+		);
+
+		expect(queued).toHaveLength(1);
+		for (const text of [
+			...queued,
+			JSON.stringify(system.deliveries.allSync()),
+			await listed.text(),
+			...system.deliveryErrors.map((e) => `${e.subject} ${String(e.error)}`),
+		]) {
+			expect(text).not.toContain("s3cretTokenPart");
+			expect(text).not.toContain("hooks.slack.com");
+		}
+		// The queue carries the two ids and nothing else.
+		expect(Object.keys(JSON.parse(queued[0] ?? "{}")).sort()).toEqual(["deliveryId", "tenantId"]);
+	});
+
+	it("never returns the payload or the actor's email in the delivery history", async () => {
+		const channel = await addChannel(acme);
+		await system.app.request("/v1/incidents", authed(acme, validBody));
+
+		const listed = await system.app.request(
+			`/v1/notification-channels/${channel}/deliveries`,
+			authed(acme),
+		);
+
+		const body = await listed.text();
+		expect(body).not.toContain("ada@acme.example");
+		expect(body).not.toContain("Checkout is down");
+		expect(body).not.toContain("payload");
+	});
+
+	it("does not let a title mention the channel or post a link", async () => {
+		await addChannel(acme);
+		await system.app.request(
+			"/v1/incidents",
+			authed(acme, { title: "<!channel> pay <https://evil.example|here>", severity: "sev1" }),
+		);
+		await work();
+
+		const [text] = system.sender.texts;
+		expect(text).toContain("&lt;!channel&gt; pay &lt;https://evil.example|here&gt;");
+		expect(text).not.toMatch(/<!channel>|<https?:/);
+	});
+
+	it("returns 404 for another tenant's channel history", async () => {
+		const channel = await addChannel(acme);
+		const globex = await signup(system.app, "admin@globex.example", "Globex");
+
+		const res = await system.app.request(
+			`/v1/notification-channels/${channel}/deliveries`,
+			authed(globex),
+		);
+
+		expect(res.status).toBe(404);
+	});
+
+	it("does not post another tenant's delivery from a forged queue message", async () => {
+		await addChannel(acme);
+		await system.app.request("/v1/incidents", authed(acme, validBody));
+		await work();
+		const [delivery] = system.deliveries.allSync();
+		const globex = await signup(system.app, "admin@globex.example", "Globex");
+		const globexTenant = (await system.accounts.findUserByEmail("admin@globex.example"))?.tenantId;
+		expect(globex).toBeTruthy();
+
+		system.notificationQueue.sendRaw(
+			JSON.stringify({ tenantId: globexTenant, deliveryId: delivery?.id }),
+		);
+		await work();
+
+		expect(system.sender.posts).toHaveLength(1);
+	});
+
+	it("does not post to another tenant's channel", async () => {
+		await addChannel(acme);
+		const globex = await signup(system.app, "admin@globex.example", "Globex");
+
+		await system.app.request("/v1/incidents", authed(globex, validBody));
+		await work();
+
+		expect(system.sender.posts).toEqual([]);
 	});
 });

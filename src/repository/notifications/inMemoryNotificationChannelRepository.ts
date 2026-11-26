@@ -39,4 +39,15 @@ export class InMemoryNotificationChannelRepository implements NotificationChanne
 			.sort(byCreatedThenId);
 		return { items: owned.slice(offset, offset + limit), total: owned.length };
 	}
+
+	async findById(tenantId: TenantId, id: string): Promise<NotificationChannel | null> {
+		return (
+			this.channels.find((channel) => channel.tenantId === tenantId && channel.id === id) ?? null
+		);
+	}
+
+	// Used by InMemoryNotificationDeliveryRepository, the twin of its INSERT ... SELECT.
+	allSync(tenantId: TenantId): NotificationChannel[] {
+		return this.channels.filter((channel) => channel.tenantId === tenantId).sort(byCreatedThenId);
+	}
 }

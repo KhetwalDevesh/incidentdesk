@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createAesGcmSecretBox } from "../src/adapters/aesGcmSecretBox";
-import { InMemoryAlertQueue } from "../src/adapters/inMemoryAlertQueue";
+import { InMemoryQueue } from "../src/adapters/inMemoryQueue";
 import type { IncidentId } from "../src/contract/incidents";
 import {
 	type Alert,
 	type AlertOutbox,
+	type AlertRef,
 	type AlertRepository,
 	type AlertSource,
 	type AlertSourceLookup,
@@ -494,7 +495,7 @@ describe("alert grouping races in postgres", () => {
 				sentAt: null,
 			});
 		}
-		const queue = new InMemoryAlertQueue({ now: () => now });
+		const queue = new InMemoryQueue<AlertRef>({ now: () => now });
 		for (const { id } of (await alerts.list(tenantId, { limit: count, offset: 0 })).items) {
 			await queue.send({ tenantId, alertId: id });
 		}
