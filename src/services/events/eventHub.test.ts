@@ -305,6 +305,23 @@ describe("event hub", () => {
 		expect(types(fast).filter((type) => type === "incident.opened")).toHaveLength(101);
 	});
 
+	it("closes a stream whose write fails, and keeps serving the others", async () => {
+		const broken = sink();
+		broken.write = async (event) => {
+			if (event.type !== "ready") throw new Error("socket closed");
+		};
+		const healthy = sink();
+		hub.connect(member("grace"), broken);
+		hub.connect(member("alan"), healthy);
+
+		opened("i-1");
+		opened("i-2");
+		await flush();
+
+		expect(broken.closed).toBe(true);
+		expect(types(healthy)).toEqual(["ready", "incident.opened", "incident.opened"]);
+	});
+
 	it("closes a stream when its token expires", async () => {
 		const grace = sink();
 		hub.connect(member("grace", ACME, new Date(START.getTime() + 60_000)), grace);

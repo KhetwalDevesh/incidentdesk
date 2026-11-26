@@ -31,9 +31,10 @@ export const eventRoutes = (hub: EventHub, heartbeatMs = STREAM_HEARTBEAT_MS) =>
 				},
 				close: finish,
 			});
-			// A comment line keeps proxies from closing an idle stream.
+			// A comment line keeps proxies from closing an idle stream. Hono's write never rejects:
+			// a client that went away is noticed through onAbort below.
 			const heartbeat = setInterval(() => {
-				stream.write(": heartbeat\n\n").catch(disconnect);
+				void stream.write(": heartbeat\n\n");
 			}, heartbeatMs);
 			stream.onAbort(disconnect);
 			await finished;
