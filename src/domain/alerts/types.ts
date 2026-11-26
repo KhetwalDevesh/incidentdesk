@@ -5,6 +5,7 @@ import type {
 	AlertListQuery,
 	AlertPayload,
 	CreateAlertSourceRequest,
+	UpdateAlertSourceRequest,
 } from "../../contract/alerts";
 import type { PageQuery } from "../../contract/common";
 import type { IncidentId, IncidentSeverity } from "../../contract/incidents";
@@ -25,8 +26,17 @@ export type AlertSource = {
 	// The HMAC signing secret, sealed by a SecretBox. The plaintext is never stored.
 	secretCiphertext: Uint8Array;
 	secretHint: string;
+	// The schedule that assigns its incidents. Null: the tenant's default schedule.
+	onCallScheduleId: string | null;
 	createdAt: Date;
 };
+
+export type AlertSourceWriteOutcome =
+	| { status: "saved"; source: AlertSource }
+	| { status: "not_found" }
+	| { status: "name_taken" }
+	// onCallScheduleId names no schedule of the tenant.
+	| { status: "schedule_not_found" };
 
 export type AlertSourcePage = { items: AlertSource[]; total: number };
 
@@ -67,13 +77,19 @@ export const alertQueueBody = ({ tenantId, alertId }: AlertRef) => ({ tenantId, 
 
 // Tenant-scoped. Every method takes tenantId first, like every repository.
 export interface AlertSourceRepository {
-	// Returns null when the tenant already has a source with this name.
 	create(
 		tenantId: TenantId,
 		source: Omit<AlertSource, "tenantId">,
 		// Written only when the source is created.
 		audit: AuditEntry,
-	): Promise<AlertSource | null>;
+	): Promise<AlertSourceWriteOutcome>;
+	// Links the source to a schedule, or unlinks it with null.
+	link(
+		tenantId: TenantId,
+		id: string,
+		onCallScheduleId: string | null,
+		audit: AuditEntry,
+	): Promise<AlertSourceWriteOutcome>;
 	list(tenantId: TenantId, page: PageQuery): Promise<AlertSourcePage>;
 }
 
@@ -153,6 +169,12 @@ export interface AlertSourceService {
 		context?: RequestContext,
 	): Promise<Result<CreatedAlertSource>>;
 	list(principal: Principal, page: PageQuery): Promise<Result<AlertSourcePage>>;
+	update(
+		principal: Principal,
+		id: string,
+		input: UpdateAlertSourceRequest,
+		context?: RequestContext,
+	): Promise<Result<AlertSource>>;
 }
 
 export interface AlertService {

@@ -14,7 +14,11 @@ import type { Incident } from "../../domain/incidents/types";
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries } from "../audit/postgresAuditRepository";
-import { INCIDENT_COLUMNS } from "../incidents/postgresIncidentRepository";
+import {
+	INCIDENT_COLUMNS,
+	INCIDENT_PLACEHOLDERS,
+	incidentValues,
+} from "../incidents/postgresIncidentRepository";
 import { insertDeliveries } from "../notifications/postgresNotificationDeliveryRepository";
 
 const COLUMNS =
@@ -62,7 +66,7 @@ const toAlert = (row: AlertRow): Alert => ({
 // The partial unique index incidents_unresolved_group_key arbitrates, so concurrent
 // workers that see the same new key end with one incident.
 const OPEN_OR_ATTACH = `INSERT INTO incidents (${INCIDENT_COLUMNS})
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	VALUES (${INCIDENT_PLACEHOLDERS})
 	ON CONFLICT (tenant_id, alert_source_id, dedup_key) WHERE status <> 'resolved'
 	DO UPDATE SET alert_count = incidents.alert_count + 1,
 		last_alert_at = GREATEST(incidents.last_alert_at, EXCLUDED.last_alert_at)
@@ -184,23 +188,15 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 			if (!alert) return null;
 
 			const grouped = candidate
-				? await client.query<{ id: string; opened: boolean }>(OPEN_OR_ATTACH, [
-						candidate.id,
-						tenantId,
-						candidate.title,
-						candidate.severity,
-						candidate.status,
-						candidate.createdAt,
-						candidate.createdBy,
-						candidate.acknowledgedAt,
-						candidate.acknowledgedBy,
-						candidate.resolvedAt,
-						candidate.resolvedBy,
-						alert.source_id,
-						alert.dedup_key,
-						candidate.alertCount,
-						alert.received_at,
-					])
+				? await client.query<{ id: string; opened: boolean }>(
+						OPEN_OR_ATTACH,
+						incidentValues(tenantId, {
+							...candidate,
+							alertSourceId: alert.source_id,
+							dedupKey: alert.dedup_key,
+							lastAlertAt: alert.received_at,
+						}),
+					)
 				: await client.query<{ id: string; opened: boolean }>(ATTACH_ONLY, [
 						tenantId,
 						alert.source_id,

@@ -21,7 +21,8 @@ type UserRow = {
 	id: string;
 	tenant_id: string;
 	email: string;
-	role: Role;
+	// May still be 'viewer' while a deploy rolls out: see migration 0013.
+	role: Role | "viewer";
 	password_hash: string | null;
 	created_at: Date;
 };
@@ -30,7 +31,8 @@ const toUser = (row: UserRow): User => ({
 	id: row.id,
 	tenantId: row.tenant_id as TenantId,
 	email: row.email,
-	role: row.role,
+	// The viewer role is gone. A row an old instance wrote reads as a responder, as 0013 made it.
+	role: row.role === "viewer" ? "responder" : row.role,
 	passwordHash: row.password_hash,
 	createdAt: row.created_at,
 });
@@ -127,6 +129,15 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 		return rows[0] ? toUser(rows[0]) : null;
 	}
 
+	async findUsers(tenantId: TenantId, userIds: string[]): Promise<User[]> {
+		if (userIds.length === 0) return [];
+		const { rows } = await this.pool.query<UserRow>(
+			`SELECT ${USER_COLUMNS} FROM users WHERE tenant_id = $1 AND id = ANY($2::uuid[])`,
+			[tenantId, [...new Set(userIds)]],
+		);
+		return rows.map(toUser);
+	}
+
 	async listUsers(tenantId: TenantId, { limit, offset }: PageQuery): Promise<UserPage> {
 		const [page, count] = await Promise.all([
 			this.pool.query<UserRow>(
@@ -209,7 +220,13 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 			if (!keepsActiveAdmin(locked.activeAdmins, new Map(userIds.map((id) => [id, null])))) {
 				return { applied: false, rejection: { reason: "last_admin" } };
 			}
-			// password_setup_tokens cascade, so a pending member's invite dies with them.
+			// Their incidents become unassigned, so nobody is stuck behind a missing assignee.
+			// incidents.tenant_id is text (see 0002), so there is no foreign key to do it.
+			await client.query(
+				"UPDATE incidents SET assignee_id = NULL WHERE tenant_id = $1::text AND assignee_id = ANY($2::uuid[])",
+				[tenantId, userIds],
+			);
+			// password_setup_tokens, on-call participants and overrides cascade.
 			await client.query("DELETE FROM users WHERE tenant_id = $1 AND id = ANY($2::uuid[])", [
 				tenantId,
 				userIds,

@@ -24,6 +24,10 @@ const actorText = (actor: DeliveryActor) => {
 	return actor.email === null ? "a removed member" : escapeMrkdwn(actor.email);
 };
 
+// How a message names the assignee. Spec: docs/features/on-call-schedules.md.
+const assigneeText = (assignee: { email: string | null }) =>
+	assignee.email === null ? "a removed member" : escapeMrkdwn(assignee.email);
+
 // 2m 39s, 1h 5m, 3d 2h, 45s.
 export const formatDuration = (ms: number) => {
 	const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -56,8 +60,23 @@ export const slackMessage = (
 	if (event === "incident.opened") {
 		const alerts =
 			payload.actor.type === "alert_source" ? ` · ${plural(payload.alertCount, "alert")}` : "";
+		// Deliveries recorded before assignment existed have no assignee key, and no line.
+		const assigned =
+			payload.assignee === undefined
+				? ""
+				: payload.assignee === null
+					? "\nUnassigned"
+					: `\nAssigned to ${assigneeText(payload.assignee)}`;
 		return {
-			text: `${SEVERITY_ICONS[payload.severity]} ${severity} incident opened: ${title}\nOpened by ${actor}${alerts} · ${reference}`,
+			text: `${SEVERITY_ICONS[payload.severity]} ${severity} incident opened: ${title}\nOpened by ${actor}${alerts} · ${reference}${assigned}`,
+		};
+	}
+	if (event === "incident.reassigned") {
+		const change = payload.assignee
+			? `Reassigned to ${assigneeText(payload.assignee)} by ${actor}`
+			: `Unassigned by ${actor}`;
+		return {
+			text: `👤 ${severity} incident reassigned: ${title}\n${change} · ${reference}`,
 		};
 	}
 	if (event === "incident.acknowledged") {

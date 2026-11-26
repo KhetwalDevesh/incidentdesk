@@ -53,6 +53,8 @@ export const hashSetupToken = (token: string) => createHash("sha256").update(tok
 // Tenant-scoped. Every method takes tenantId first, like every repository.
 export interface AccountRepository {
 	findUser(tenantId: TenantId, userId: string): Promise<User | null>;
+	// The tenant's members among these ids, in any order. Bounded by the ids given.
+	findUsers(tenantId: TenantId, userIds: string[]): Promise<User[]>;
 	listUsers(tenantId: TenantId, page: PageQuery): Promise<UserPage>;
 	// Returns false when the email is already registered, in any tenant.
 	addUser(
@@ -71,7 +73,8 @@ export interface AccountRepository {
 		changes: RoleChange[],
 		audit: (before: User, after: User) => AuditEntry,
 	): Promise<MemberChangeOutcome>;
-	// All or nothing, under the same lock. Deletes the users and their setup tokens.
+	// All or nothing, under the same lock. Deletes the users and their setup tokens, removes
+	// them from on-call rotations and overrides, and unassigns their incidents.
 	// `users` are the members as they were, in request order.
 	removeUsers(
 		tenantId: TenantId,

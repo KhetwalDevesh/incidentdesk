@@ -6,9 +6,10 @@ IncidentDesk helps small engineering teams receive alerts, group them into incid
 
 | Role | Can do |
 |---|---|
-| Viewer | Read incidents |
-| Responder | Viewer actions, plus create, acknowledge and resolve incidents |
-| Admin | Responder actions, plus manage members and webhook sources |
+| Responder | Read incidents, members and on-call schedules; create incidents; acknowledge and resolve unassigned incidents and their own; reassign incidents; add and remove their own on-call overrides |
+| Admin | Responder actions, plus act on any incident, unassign incidents, and manage members, schedules, alert sources and Slack channels |
+
+The viewer role was removed in `docs/features/on-call-schedules.md`.
 
 ## Core flow
 
@@ -27,7 +28,7 @@ IncidentDesk helps small engineering teams receive alerts, group them into incid
 | 1. Foundation | Rules, contract, CI, golden reference slice | Done |
 | 2. Core | Postgres, real auth, tenants, roles | Done |
 | 3. Pipeline | Signed webhooks, queue, grouping, audit log | Done |
-| 4. Team flow | On-call, Slack, dashboard, realtime status | In progress (Slack delivery done) |
+| 4. Team flow | On-call, Slack, dashboard, realtime status | In progress (Slack delivery, on-call schedules and assignment done) |
 | 5. AI | Summaries, severity suggestions, postmortems | Planned |
 | 6. Hardening | Load test, security review, AWS deployment | Planned |
 

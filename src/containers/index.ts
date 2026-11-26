@@ -21,6 +21,7 @@ import { PostgresAuditRepository } from "../repository/audit/postgresAuditReposi
 import { PostgresIncidentRepository } from "../repository/incidents/postgresIncidentRepository";
 import { PostgresNotificationChannelRepository } from "../repository/notifications/postgresNotificationChannelRepository";
 import { PostgresNotificationDeliveryRepository } from "../repository/notifications/postgresNotificationDeliveryRepository";
+import { PostgresOnCallRepository } from "../repository/onCall/postgresOnCallRepository";
 import { createAlertIngestService } from "../services/alerts/alertIngestService";
 import { createAlertProcessor } from "../services/alerts/alertProcessor";
 import { createAlertService } from "../services/alerts/alertService";
@@ -33,6 +34,8 @@ import { createMemberService } from "../services/members/memberService";
 import { createDeliveryDispatcher } from "../services/notifications/deliveryDispatcher";
 import { createDeliveryProcessor } from "../services/notifications/deliveryProcessor";
 import { createNotificationChannelService } from "../services/notifications/notificationChannelService";
+import { createOnCallAssigner } from "../services/onCall/onCallAssigner";
+import { createOnCallScheduleService } from "../services/onCall/onCallScheduleService";
 
 // The composition root: the only place that picks concrete repositories and adapters.
 
@@ -71,12 +74,14 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 	const alerts = new PostgresAlertRepository(pool);
 	const incidents = new PostgresIncidentRepository(pool);
 	const deliveries = new PostgresNotificationDeliveryRepository(pool);
+	const schedules = new PostgresOnCallRepository(pool);
 
 	const app = createApp({
 		authenticate: authService.authenticate,
 		authService,
 		incidentService: createIncidentService(incidents, {
 			members: accounts,
+			onCall: createOnCallAssigner(schedules),
 			dispatcher: createDeliveryDispatcher({
 				deliveries,
 				queue: buildNotificationQueue(config),
@@ -101,6 +106,7 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 			onSendError: log.onAlertSendError,
 		}),
 		auditService: createAuditService(audit, incidents),
+		onCallScheduleService: createOnCallScheduleService(schedules),
 	});
 	return { app, pool };
 };
@@ -117,6 +123,7 @@ export const buildWorker = (config: Config, onError: (subject: string, error: un
 		outbox: alerts,
 		onError,
 		sources: new PostgresAlertSourceRepository(pool),
+		onCall: createOnCallAssigner(new PostgresOnCallRepository(pool)),
 		dispatcher: createDeliveryDispatcher({
 			deliveries,
 			queue: notificationQueue,

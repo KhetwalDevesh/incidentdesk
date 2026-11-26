@@ -12,6 +12,7 @@ export const toAlertSourceResponse = (source: AlertSource): AlertSourceResponse 
 	id: source.id,
 	name: source.name,
 	secretHint: `…${source.secretHint}`,
+	onCallScheduleId: source.onCallScheduleId,
 	createdAt: source.createdAt.toISOString(),
 });
 

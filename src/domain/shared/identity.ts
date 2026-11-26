@@ -11,6 +11,4 @@ export type Principal = {
 	role: Role;
 };
 
-export const canRespond = (principal: Principal): boolean => principal.role !== "viewer";
-
 export const isAdmin = (principal: Principal): boolean => principal.role === "admin";

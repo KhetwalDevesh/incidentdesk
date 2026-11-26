@@ -18,7 +18,7 @@ import type { TenantId } from "../../domain/shared/identity";
 // Spec: docs/features/slack-delivery.md
 
 const COLUMNS =
-	"tenant_id, id, channel_id, incident_id, event, payload, state, attempts, next_attempt_at, sent_at, failure_reason, last_status, last_error, created_at, delivered_at";
+	"tenant_id, id, channel_id, incident_id, event, occurrence, payload, state, attempts, next_attempt_at, sent_at, failure_reason, last_status, last_error, created_at, delivered_at";
 
 type DeliveryRow = {
 	tenant_id: string;
@@ -26,6 +26,7 @@ type DeliveryRow = {
 	channel_id: string;
 	incident_id: string;
 	event: NotificationDelivery["event"];
+	occurrence: number;
 	payload: NotificationDelivery["payload"];
 	state: NotificationDelivery["state"];
 	attempts: number;
@@ -44,6 +45,7 @@ const toDelivery = (row: DeliveryRow): NotificationDelivery => ({
 	channelId: row.channel_id,
 	incidentId: row.incident_id as IncidentId,
 	event: row.event,
+	occurrence: row.occurrence,
 	payload: row.payload,
 	state: row.state,
 	attempts: row.attempts,
@@ -58,9 +60,10 @@ const toDelivery = (row: DeliveryRow): NotificationDelivery => ({
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Removes the actor's email once a delivery is no longer pending. A no-op for an alert source,
-// whose payload has no email key.
-const WITHOUT_EMAIL = "jsonb_set(payload, '{actor,email}', 'null'::jsonb, false)";
+// Removes the actor's and the assignee's emails once a delivery is no longer pending. Each is a
+// no-op where the key is missing: an alert source actor, or an unassigned or older payload.
+const WITHOUT_EMAIL =
+	"jsonb_set(jsonb_set(payload, '{actor,email}', 'null'::jsonb, false), '{assignee,email}', 'null'::jsonb, false)";
 
 // Writes one pending delivery per enabled channel whose minimum severity the incident meets,
 // on the caller's client, so they commit or roll back with the incident change.
@@ -76,11 +79,11 @@ export const insertDeliveries = async (
 	// The unique event key makes a repeated notice a no-op.
 	await db.query(
 		`INSERT INTO notification_deliveries
-			(tenant_id, id, channel_id, incident_id, event, payload, state, attempts, next_attempt_at, created_at)
-		SELECT tenant_id, gen_random_uuid(), id, $2, $3, $4::jsonb, 'pending', 0, $5, $5
+			(tenant_id, id, channel_id, incident_id, event, occurrence, payload, state, attempts, next_attempt_at, created_at)
+		SELECT tenant_id, gen_random_uuid(), id, $2, $3, $7, $4::jsonb, 'pending', 0, $5, $5
 		FROM notification_channels
 		WHERE tenant_id = $1 AND enabled AND min_severity >= $6
-		ON CONFLICT (tenant_id, channel_id, incident_id, event) DO NOTHING`,
+		ON CONFLICT (tenant_id, channel_id, incident_id, event, occurrence) DO NOTHING`,
 		[
 			tenantId,
 			notice.incidentId,
@@ -88,6 +91,7 @@ export const insertDeliveries = async (
 			JSON.stringify(notice.payload),
 			notice.createdAt,
 			notice.severity,
+			notice.occurrence ?? 0,
 		],
 	);
 };

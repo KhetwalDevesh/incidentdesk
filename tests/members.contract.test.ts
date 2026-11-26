@@ -59,23 +59,40 @@ describe("member management contract", () => {
 		it("changes an active member's role, which applies to their next request", async () => {
 			const { member, token } = await join("grace@acme.example", "responder");
 
-			const res = await send("PATCH", `/v1/members/${member.id}`, admin, { role: "viewer" });
+			const before = await app.request("/v1/alert-sources", authed(token));
+			const res = await send("PATCH", `/v1/members/${member.id}`, admin, { role: "admin" });
 
+			expect(before.status).toBe(403);
 			expect(res.status).toBe(200);
 			expect(MemberSchema.parse(await res.json())).toMatchObject({
 				id: member.id,
-				role: "viewer",
+				role: "admin",
 				status: "active",
 			});
-			const create = await app.request(
-				"/v1/incidents",
-				authed(token, { title: "Checkout is down", severity: "sev1" }),
+			expect((await app.request("/v1/alert-sources", authed(token))).status).toBe(200);
+		});
+
+		// Spec: docs/features/on-call-schedules.md. The role is gone, not just hidden.
+		it("refuses the removed viewer role in an invite, a change or a bulk change", async () => {
+			const { id } = await invite("grace@acme.example");
+
+			const invited = await app.request(
+				"/v1/members",
+				authed(admin, { email: "linus@acme.example", role: "viewer" }),
 			);
-			expect(create.status).toBe(403);
+			const changed = await send("PATCH", `/v1/members/${id}`, admin, { role: "viewer" });
+			const bulk = await send("PATCH", "/v1/members", admin, {
+				changes: [{ id, role: "viewer" }],
+			});
+
+			for (const res of [invited, changed, bulk]) {
+				expect((await problem(res, 422)).errors?.[0]?.path).toMatch(/role$/);
+			}
+			expect((await members()).map((m) => m.role).sort()).toEqual(["admin", "responder"]);
 		});
 
 		it("changes a pending member's role, and treats the current role as a no-op", async () => {
-			const member = await invite("grace@acme.example", "viewer");
+			const member = await invite("grace@acme.example", "responder");
 
 			const changed = await send("PATCH", `/v1/members/${member.id}`, admin, { role: "admin" });
 			const same = await send("PATCH", `/v1/members/${member.id}`, admin, { role: "admin" });
@@ -91,7 +108,9 @@ describe("member management contract", () => {
 		it("refuses the admin's own role, even with another admin present", async () => {
 			await join("grace@acme.example", "admin");
 
-			const res = await send("PATCH", `/v1/members/${await adminId()}`, admin, { role: "viewer" });
+			const res = await send("PATCH", `/v1/members/${await adminId()}`, admin, {
+				role: "responder",
+			});
 
 			expect((await problem(res, 409)).detail).toBe("You cannot change your own role");
 		});
@@ -99,11 +118,11 @@ describe("member management contract", () => {
 		it("returns 404 for an unknown member, and 422 for a bad id or role", async () => {
 			await problem(
 				await send("PATCH", "/v1/members/00000000-0000-4000-8000-000000000000", admin, {
-					role: "viewer",
+					role: "responder",
 				}),
 				404,
 			);
-			await problem(await send("PATCH", "/v1/members/abc", admin, { role: "viewer" }), 422);
+			await problem(await send("PATCH", "/v1/members/abc", admin, { role: "responder" }), 422);
 			const { id } = await invite("grace@acme.example");
 			await problem(await send("PATCH", `/v1/members/${id}`, admin, { role: "owner" }), 422);
 		});
@@ -137,12 +156,12 @@ describe("member management contract", () => {
 			const first = await invite("grace@acme.example");
 			await send("DELETE", `/v1/members/${first.id}`, admin);
 
-			const again = await invite("grace@acme.example", "viewer");
+			const again = await invite("grace@acme.example", "admin");
 
 			expect(again.id).not.toBe(first.id);
 			expect(again).toMatchObject({
 				email: "grace@acme.example",
-				role: "viewer",
+				role: "admin",
 				status: "pending",
 			});
 		});
@@ -191,8 +210,8 @@ describe("member management contract", () => {
 
 	describe("bulk changes", () => {
 		it("changes every role in one request, returning members in request order", async () => {
-			const grace = await invite("grace@acme.example", "viewer");
-			const linus = await invite("linus@acme.example", "viewer");
+			const grace = await invite("grace@acme.example", "responder");
+			const linus = await invite("linus@acme.example", "responder");
 
 			const res = await send("PATCH", "/v1/members", admin, {
 				changes: [
@@ -214,7 +233,7 @@ describe("member management contract", () => {
 
 			const res = await send("PATCH", "/v1/members", admin, {
 				changes: [
-					{ id: grace.member.id, role: "viewer" },
+					{ id: grace.member.id, role: "responder" },
 					{ id: linus.member.id, role: "admin" },
 				],
 			});
@@ -223,13 +242,13 @@ describe("member management contract", () => {
 		});
 
 		it("changes nothing when any item fails, and lists every failing item", async () => {
-			const grace = await invite("grace@acme.example", "viewer");
+			const grace = await invite("grace@acme.example", "responder");
 
 			const res = await send("PATCH", "/v1/members", admin, {
 				changes: [
 					{ id: grace.id, role: "admin" },
 					{ id: "00000000-0000-4000-8000-000000000001", role: "admin" },
-					{ id: "00000000-0000-4000-8000-000000000002", role: "viewer" },
+					{ id: "00000000-0000-4000-8000-000000000002", role: "responder" },
 				],
 			});
 
@@ -237,16 +256,16 @@ describe("member management contract", () => {
 				{ path: "changes.1.id", message: "Member not found" },
 				{ path: "changes.2.id", message: "Member not found" },
 			]);
-			expect((await members()).find((m) => m.id === grace.id)?.role).toBe("viewer");
+			expect((await members()).find((m) => m.id === grace.id)?.role).toBe("responder");
 		});
 
 		it("refuses a batch that includes the caller, naming the item", async () => {
-			const grace = await invite("grace@acme.example", "viewer");
+			const grace = await invite("grace@acme.example", "responder");
 
 			const res = await send("PATCH", "/v1/members", admin, {
 				changes: [
 					{ id: grace.id, role: "admin" },
-					{ id: await adminId(), role: "viewer" },
+					{ id: await adminId(), role: "responder" },
 				],
 			});
 
@@ -283,7 +302,7 @@ describe("member management contract", () => {
 				{
 					changes: [0, 0].map(() => ({
 						id: "00000000-0000-4000-8000-000000000001",
-						role: "viewer",
+						role: "responder",
 					})),
 				},
 			],
@@ -292,13 +311,15 @@ describe("member management contract", () => {
 				{
 					changes: Array.from({ length: 51 }, (_, n) => ({
 						id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
-						role: "viewer",
+						role: "responder",
 					})),
 				},
 			],
 			[
 				"an unknown field",
-				{ changes: [{ id: "00000000-0000-4000-8000-000000000001", role: "viewer", email: "x" }] },
+				{
+					changes: [{ id: "00000000-0000-4000-8000-000000000001", role: "responder", email: "x" }],
+				},
 			],
 		])("rejects a bulk role change with %s", async (_case, body) => {
 			await problem(await send("PATCH", "/v1/members", admin, body), 422);

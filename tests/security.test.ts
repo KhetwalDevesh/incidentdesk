@@ -16,6 +16,11 @@ import {
 	NotificationChannelListSchema,
 	NotificationChannelSchema,
 } from "../src/contract/notificationChannels";
+import {
+	OnCallOverrideSchema,
+	OnCallScheduleListSchema,
+	OnCallScheduleSchema,
+} from "../src/contract/onCall";
 import { channelSecretContext } from "../src/domain/notifications/types";
 import type { TenantId } from "../src/domain/shared/identity";
 import { anAudit } from "./auditEntries";
@@ -183,7 +188,10 @@ describe("login responses", () => {
 	it("are identical for a wrong password, an unknown email and a pending member", async () => {
 		const app = buildTestApp();
 		const admin = await signup(app, "ada@example.com");
-		await app.request("/v1/members", authed(admin, { email: "grace@example.com", role: "viewer" }));
+		await app.request(
+			"/v1/members",
+			authed(admin, { email: "grace@example.com", role: "responder" }),
+		);
 
 		const bodies = await Promise.all(
 			[
@@ -227,20 +235,32 @@ describe("member management", () => {
 		return AccessTokenSchema.parse(await res.json()).accessToken;
 	};
 
-	it.each(["viewer", "responder"])("forbids a %s from listing or adding members", async (role) => {
-		const member = await activate((await invite(admin, `${role}@example.com`, role)).setupToken);
+	// Spec: docs/features/on-call-schedules.md. Every member sees their own tenant's members.
+	it("lets a responder list their own tenant's members, but not add one", async () => {
+		const member = await activate(
+			(await invite(admin, "grace@example.com", "responder")).setupToken,
+		);
+		const globex = await signup(app, "linus@example.com", "Globex");
+		await invite(globex, "frank@example.com", "responder");
 
-		expect((await app.request("/v1/members", authed(member))).status).toBe(403);
+		const listed = await app.request("/v1/members", authed(member));
 		const add = await app.request(
 			"/v1/members",
 			authed(member, { email: "x@example.com", role: "admin" }),
 		);
+
+		expect(listed.status).toBe(200);
+		expect(
+			MemberListSchema.parse(await listed.json())
+				.items.map((m) => m.email)
+				.sort(),
+		).toEqual(["ada@example.com", "grace@example.com"]);
 		expect(add.status).toBe(403);
 	});
 
 	it("keeps each tenant's members separate", async () => {
 		const globex = await signup(app, "linus@example.com", "Globex");
-		await invite(globex, "grace@example.com", "viewer");
+		await invite(globex, "grace@example.com", "responder");
 
 		const acme = MemberListSchema.parse(
 			await (await app.request("/v1/members", authed(admin))).json(),
@@ -258,7 +278,7 @@ describe("member management", () => {
 	});
 
 	it("never returns password hashes", async () => {
-		await activate((await invite(admin, "grace@example.com", "viewer")).setupToken);
+		await activate((await invite(admin, "grace@example.com", "responder")).setupToken);
 
 		const body = await (await app.request("/v1/members", authed(admin))).text();
 
@@ -266,7 +286,7 @@ describe("member management", () => {
 	});
 
 	it("accepts a setup token only once", async () => {
-		const { setupToken } = await invite(admin, "grace@example.com", "viewer");
+		const { setupToken } = await invite(admin, "grace@example.com", "responder");
 		await activate(setupToken);
 
 		const again = await app.request(
@@ -278,7 +298,7 @@ describe("member management", () => {
 	});
 
 	it("lets exactly one of two simultaneous setup-token uses win", async () => {
-		const { setupToken } = await invite(admin, "grace@example.com", "viewer");
+		const { setupToken } = await invite(admin, "grace@example.com", "responder");
 
 		const responses = await Promise.all(
 			[1, 2].map(() =>
@@ -343,8 +363,8 @@ describe("notification channels", () => {
 		expect(NotificationChannelListSchema.parse(await list.json()).total).toBe(0);
 	});
 
-	it("refuses viewers and responders, even with a valid body", async () => {
-		for (const token of ["acme-viewer", "acme-responder"]) {
+	it("refuses responders, even with a valid body", async () => {
+		for (const token of ["acme-responder-2", "acme-responder"]) {
 			const res = await app.request(
 				PATH,
 				authed(token, { name: "#sneaky", webhookUrl: SECRET_URL }),
@@ -465,8 +485,8 @@ describe("alert ingestion", () => {
 		expect(res.status).toBe(401);
 	});
 
-	it("refuses viewers and responders on sources and alerts", async () => {
-		for (const token of ["acme-viewer", "acme-responder"]) {
+	it("refuses responders on sources and alerts", async () => {
+		for (const token of ["acme-responder-2", "acme-responder"]) {
 			const created = await system.app.request("/v1/alert-sources", authed(token, { name: "x" }));
 			const listed = await system.app.request("/v1/alerts", authed(token));
 			expect([created.status, listed.status]).toEqual([403, 403]);
@@ -548,7 +568,7 @@ describe("audit log", () => {
 		);
 		const invite = await system.app.request(
 			"/v1/members",
-			authed(ownerToken, { email: "milton@initech.example", role: "viewer" }),
+			authed(ownerToken, { email: "milton@initech.example", role: "responder" }),
 		);
 		const { setupToken } = (await invite.json()) as { setupToken: string };
 		await system.app.request(
@@ -563,9 +583,9 @@ describe("audit log", () => {
 			"/v1/auth/login",
 			post({ email: "milton@initech.example", password: "stapler stapler stapler" }),
 		);
-		const { accessToken: viewerToken } = (await login.json()) as { accessToken: string };
+		const { accessToken: memberToken } = (await login.json()) as { accessToken: string };
 
-		for (const token of [ownerToken, viewerToken]) {
+		for (const token of [ownerToken, memberToken]) {
 			const text = await log(token);
 			AuditEventListSchema.parse(JSON.parse(text));
 			for (const leaked of [
@@ -604,45 +624,42 @@ describe("member management changes", () => {
 			await (await app.request("/v1/members", authed(adminToken, { email, role }))).json(),
 		);
 
-	it.each(["viewer", "responder"])(
-		"forbids a %s from changing or removing members",
-		async (role) => {
-			const admin = await signup(app, "ada@acme.example", "Acme");
-			const target = await inviteTo(admin, "grace@acme.example", "viewer");
-			const member = await inviteTo(admin, `${role}@acme.example`, role);
-			const login = await app.request(
-				"/v1/auth/setup-password",
-				post({ token: member.setupToken, password: "correct horse battery" }),
-			);
-			const token = AccessTokenSchema.parse(await login.json()).accessToken;
+	it.each(["responder"])("forbids a %s from changing or removing members", async (role) => {
+		const admin = await signup(app, "ada@acme.example", "Acme");
+		const target = await inviteTo(admin, "grace@acme.example", "responder");
+		const member = await inviteTo(admin, `${role}@acme.example`, role);
+		const login = await app.request(
+			"/v1/auth/setup-password",
+			post({ token: member.setupToken, password: "correct horse battery" }),
+		);
+		const token = AccessTokenSchema.parse(await login.json()).accessToken;
 
-			const statuses = await Promise.all([
-				send("PATCH", `/v1/members/${target.id}`, token, { role: "admin" }),
-				send("DELETE", `/v1/members/${target.id}`, token),
-				send("PATCH", "/v1/members", token, { changes: [{ id: target.id, role: "admin" }] }),
-				send("POST", "/v1/members/remove", token, { ids: [target.id] }),
-			]);
+		const statuses = await Promise.all([
+			send("PATCH", `/v1/members/${target.id}`, token, { role: "admin" }),
+			send("DELETE", `/v1/members/${target.id}`, token),
+			send("PATCH", "/v1/members", token, { changes: [{ id: target.id, role: "admin" }] }),
+			send("POST", "/v1/members/remove", token, { ids: [target.id] }),
+		]);
 
-			expect(statuses.map((res) => res.status)).toEqual([403, 403, 403, 403]);
-			const members = MemberListSchema.parse(
-				await (await app.request("/v1/members", authed(admin))).json(),
-			);
-			expect(members.items.find((m) => m.id === target.id)?.role).toBe("viewer");
-		},
-	);
+		expect(statuses.map((res) => res.status)).toEqual([403, 403, 403, 403]);
+		const members = MemberListSchema.parse(
+			await (await app.request("/v1/members", authed(admin))).json(),
+		);
+		expect(members.items.find((m) => m.id === target.id)?.role).toBe("responder");
+	});
 
 	it("hides another tenant's member, alone or inside a bulk request", async () => {
 		const acme = await signup(app, "ada@acme.example", "Acme");
 		const globex = await signup(app, "hank@globex.example", "Globex");
-		const target = await inviteTo(acme, "grace@acme.example", "viewer");
-		const own = await inviteTo(globex, "frank@globex.example", "viewer");
+		const target = await inviteTo(acme, "grace@acme.example", "responder");
+		const own = await inviteTo(globex, "frank@globex.example", "responder");
 
 		const results = await Promise.all([
 			send("PATCH", `/v1/members/${target.id}`, globex, { role: "admin" }),
 			send("DELETE", `/v1/members/${target.id}`, globex),
 			send("PATCH", "/v1/members", globex, {
 				changes: [
-					{ id: own.id, role: "responder" },
+					{ id: own.id, role: "admin" },
 					{ id: target.id, role: "admin" },
 				],
 			}),
@@ -653,12 +670,12 @@ describe("member management changes", () => {
 		const acmeMembers = MemberListSchema.parse(
 			await (await app.request("/v1/members", authed(acme))).json(),
 		);
-		expect(acmeMembers.items.find((m) => m.id === target.id)?.role).toBe("viewer");
+		expect(acmeMembers.items.find((m) => m.id === target.id)?.role).toBe("responder");
 		// All or nothing: globex's own member was not changed or removed either.
 		const globexMembers = MemberListSchema.parse(
 			await (await app.request("/v1/members", authed(globex))).json(),
 		);
-		expect(globexMembers.items.find((m) => m.id === own.id)?.role).toBe("viewer");
+		expect(globexMembers.items.find((m) => m.id === own.id)?.role).toBe("responder");
 	});
 });
 
@@ -824,5 +841,180 @@ describe("slack delivery", () => {
 		await work();
 
 		expect(system.sender.posts).toEqual([]);
+	});
+});
+
+// Spec: docs/features/on-call-schedules.md
+describe("on-call", () => {
+	let app: ReturnType<typeof buildTestApp>;
+	let acme: string;
+	let globex: string;
+	let grace: { id: string; token: string };
+	let frank: { id: string; token: string };
+	let scheduleId: string;
+
+	const send = (method: string, path: string, token: string, body?: unknown) =>
+		app.request(path, {
+			method,
+			headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+			...(body === undefined ? {} : { body: JSON.stringify(body) }),
+		});
+
+	const join = async (adminToken: string, email: string) => {
+		const invited = await app.request(
+			"/v1/members",
+			authed(adminToken, { email, role: "responder" }),
+		);
+		const member = MemberInviteSchema.parse(await invited.json());
+		const res = await app.request(
+			"/v1/auth/setup-password",
+			post({ token: member.setupToken, password: PASSWORD }),
+		);
+		return { id: member.id, token: AccessTokenSchema.parse(await res.json()).accessToken };
+	};
+
+	const schedule = (participants: string[]) => ({
+		name: "Payments",
+		timeZone: "UTC",
+		handoffTime: "00:00",
+		rotationDays: 7,
+		startsOn: "2020-01-06",
+		participants,
+		isDefault: true,
+	});
+
+	const cover = (userId: string) => ({
+		userId,
+		startsAt: new Date(Date.now() + 60_000).toISOString(),
+		endsAt: new Date(Date.now() + 3_600_000).toISOString(),
+	});
+
+	beforeEach(async () => {
+		app = buildTestApp();
+		acme = await signup(app, "ada@acme.example", "Acme");
+		globex = await signup(app, "hank@globex.example", "Globex");
+		grace = await join(acme, "grace@acme.example");
+		frank = await join(globex, "frank@globex.example");
+		const res = await send("POST", "/v1/on-call-schedules", acme, schedule([grace.id]));
+		scheduleId = OnCallScheduleSchema.parse(await res.json()).id;
+	});
+
+	it("hides a schedule, its on-call answer and its overrides from another tenant", async () => {
+		const path = `/v1/on-call-schedules/${scheduleId}`;
+
+		const statuses = await Promise.all([
+			send("GET", path, globex),
+			send("PATCH", path, globex, { name: "Mine" }),
+			send("DELETE", path, globex),
+			send("GET", `${path}/on-call`, globex),
+			send("GET", `${path}/overrides`, globex),
+			send("POST", `${path}/overrides`, globex, cover(frank.id)),
+		]);
+
+		expect(statuses.map((res) => res.status)).toEqual([404, 404, 404, 404, 404, 404]);
+		const list = await send("GET", "/v1/on-call-schedules", globex);
+		expect(OnCallScheduleListSchema.parse(await list.json()).total).toBe(0);
+		expect((await send("GET", path, acme)).status).toBe(200);
+	});
+
+	it("never puts another tenant's member in a rotation, an override or an incident", async () => {
+		const path = `/v1/on-call-schedules/${scheduleId}`;
+		const incident = IncidentSchema.parse(
+			await (await send("POST", "/v1/incidents", acme, validBody)).json(),
+		);
+
+		const results = await Promise.all([
+			send("POST", "/v1/on-call-schedules", acme, { ...schedule([frank.id]), name: "Other" }),
+			send("PATCH", path, acme, { participants: [grace.id, frank.id] }),
+			send("POST", `${path}/overrides`, acme, cover(frank.id)),
+			send("POST", `/v1/incidents/${incident.id}/assign`, acme, { assigneeId: frank.id }),
+		]);
+
+		expect(results.map((res) => res.status)).toEqual([404, 404, 404, 404]);
+		const read = await send("GET", path, acme);
+		expect(OnCallScheduleSchema.parse(await read.json()).participants).toEqual([
+			{ userId: grace.id, email: "grace@acme.example" },
+		]);
+	});
+
+	it("never assigns an incident from another tenant's schedule", async () => {
+		const incident = IncidentSchema.parse(
+			await (await send("POST", "/v1/incidents", globex, validBody)).json(),
+		);
+
+		expect(incident.assignee).toBeNull();
+	});
+
+	it("refuses to link an alert source to another tenant's schedule", async () => {
+		const { sourceId } = await addAlertSource(app, globex);
+
+		const patched = await send("PATCH", `/v1/alert-sources/${sourceId}`, globex, {
+			onCallScheduleId: scheduleId,
+		});
+		const created = await send("POST", "/v1/alert-sources", globex, {
+			name: "grafana",
+			onCallScheduleId: scheduleId,
+		});
+		const foreignSource = await send("PATCH", `/v1/alert-sources/${sourceId}`, acme, {
+			onCallScheduleId: scheduleId,
+		});
+
+		expect([patched.status, created.status, foreignSource.status]).toEqual([404, 404, 404]);
+	});
+
+	it("lets a responder manage only their own overrides, and no schedule", async () => {
+		const alan = await join(acme, "alan@acme.example");
+		const path = `/v1/on-call-schedules/${scheduleId}/overrides`;
+		const own = await send("POST", path, alan.token, cover(alan.id));
+		const ownId = OnCallOverrideSchema.parse(await own.json()).id;
+		const graces = await send("POST", path, acme, {
+			...cover(grace.id),
+			startsAt: new Date(Date.now() + 7_200_000).toISOString(),
+			endsAt: new Date(Date.now() + 9_000_000).toISOString(),
+		});
+		const gracesId = OnCallOverrideSchema.parse(await graces.json()).id;
+
+		const results = await Promise.all([
+			send("POST", path, alan.token, {
+				...cover(grace.id),
+				startsAt: new Date(Date.now() + 10_000_000).toISOString(),
+				endsAt: new Date(Date.now() + 11_000_000).toISOString(),
+			}),
+			send("DELETE", `${path}/${gracesId}`, alan.token),
+			send("POST", "/v1/on-call-schedules", alan.token, { ...schedule([]), name: "Mine" }),
+			send("PATCH", `/v1/on-call-schedules/${scheduleId}`, alan.token, { isDefault: false }),
+			send("DELETE", `/v1/on-call-schedules/${scheduleId}`, alan.token),
+		]);
+
+		expect(own.status).toBe(201);
+		expect(results.map((res) => res.status)).toEqual([403, 403, 403, 403, 403]);
+		expect((await send("DELETE", `${path}/${ownId}`, alan.token)).status).toBe(204);
+	});
+
+	it("lets only the assignee or an admin act on an assigned incident, and audits a takeover", async () => {
+		const alan = await join(acme, "alan@acme.example");
+		const incident = IncidentSchema.parse(
+			await (await send("POST", "/v1/incidents", acme, validBody)).json(),
+		);
+		expect(incident.assignee?.id).toBe(grace.id);
+
+		const refused = await send("POST", `/v1/incidents/${incident.id}/acknowledge`, alan.token, {});
+		const unassign = await send("POST", `/v1/incidents/${incident.id}/assign`, alan.token, {
+			assigneeId: null,
+		});
+		await send("POST", `/v1/incidents/${incident.id}/assign`, alan.token, { assigneeId: alan.id });
+		const taken = await send("POST", `/v1/incidents/${incident.id}/acknowledge`, alan.token, {});
+
+		expect([refused.status, unassign.status, taken.status]).toEqual([403, 403, 200]);
+		const timeline = AuditEventListSchema.parse(
+			await (await send("GET", `/v1/incidents/${incident.id}/events`, acme)).json(),
+		);
+		expect(timeline.items.map((event) => [event.action, event.actor.id])).toEqual([
+			["incident.created", expect.any(String)],
+			["incident.assigned", expect.any(String)],
+			["incident.assigned", alan.id],
+			["incident.acknowledged", alan.id],
+		]);
+		expect(JSON.stringify(timeline)).not.toMatch(/@acme\.example/);
 	});
 });

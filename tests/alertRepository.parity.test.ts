@@ -26,6 +26,7 @@ import { runMigrations } from "../src/repository/postgres/migrate";
 import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
 import { createAlertSourceService } from "../src/services/alerts/alertSourceService";
 import { anAudit, groupingAudit } from "./auditEntries";
+import { savedSource } from "./outcomes";
 
 const TEST_DATABASE_URL =
 	process.env.TEST_DATABASE_URL ??
@@ -78,6 +79,7 @@ const newSource = (
 	name,
 	secretCiphertext: Buffer.from([1, 2, 3, 4]),
 	secretHint: "WXYZ",
+	onCallScheduleId: null,
 	createdAt,
 });
 
@@ -118,11 +120,7 @@ describe.each([
 		stores = make();
 		acme = await newTenant();
 		globex = await newTenant();
-		source = (await stores.sources.create(
-			acme,
-			newSource("prometheus"),
-			anAudit(acme),
-		)) as AlertSource;
+		source = savedSource(await stores.sources.create(acme, newSource("prometheus"), anAudit(acme)));
 		clock = Date.parse("2030-01-01T00:00:00Z");
 	});
 
@@ -168,13 +166,15 @@ describe.each([
 		dedupKey: alert.dedupKey,
 		alertCount: 1,
 		lastAlertAt: alert.receivedAt,
+		assigneeId: null,
+		assignmentCount: 0,
 	});
 
 	describe("sources", () => {
 		it("round-trips every field, by tenant and by id", async () => {
 			const input = newSource("grafana");
 
-			const created = await stores.sources.create(acme, input, anAudit(acme));
+			const created = savedSource(await stores.sources.create(acme, input, anAudit(acme)));
 
 			expect(created).toEqual({ ...input, tenantId: acme });
 			expect(await stores.sources.findForIngest(input.id)).toEqual(created);
@@ -182,10 +182,12 @@ describe.each([
 		});
 
 		it("refuses a duplicate name in the same tenant, but allows it in another", async () => {
-			expect(await stores.sources.create(acme, newSource("prometheus"), anAudit(acme))).toBeNull();
+			expect(await stores.sources.create(acme, newSource("prometheus"), anAudit(acme))).toEqual({
+				status: "name_taken",
+			});
 			expect(
-				await stores.sources.create(globex, newSource("prometheus"), anAudit(globex)),
-			).not.toBeNull();
+				(await stores.sources.create(globex, newSource("prometheus"), anAudit(globex))).status,
+			).toBe("saved");
 		});
 
 		it("lists only the tenant's sources, oldest first, with a total", async () => {
@@ -267,11 +269,9 @@ describe.each([
 			for (const alert of [second, first, sentLongAgo, sentRecently, notDue]) {
 				await stores.alerts.enqueue(acme, alert);
 			}
-			const globexSource = (await stores.sources.create(
-				globex,
-				newSource("prometheus"),
-				anAudit(globex),
-			)) as AlertSource;
+			const globexSource = savedSource(
+				await stores.sources.create(globex, newSource("prometheus"), anAudit(globex)),
+			);
 			await stores.alerts.enqueue(globex, { ...otherTenant, sourceId: globexSource.id });
 
 			const claimed = await claimOverdue();
@@ -327,6 +327,8 @@ describe.each([
 				dedupKey: first.dedupKey,
 				alertCount: 2,
 				lastAlertAt: at(2000),
+				assigneeId: null,
+				assignmentCount: 0,
 			});
 			const page = await stores.alerts.list(acme, { limit: 10, offset: 0 });
 			expect(page.items.every((alert) => alert.state === "processed")).toBe(true);
@@ -379,7 +381,7 @@ describe.each([
 			await stores.incidents.update(
 				acme,
 				opened?.incidentId as IncidentId,
-				"open",
+				{ status: "open", assigneeId: null },
 				{
 					status: "resolved",
 				},
@@ -468,11 +470,9 @@ describe("alert grouping races in postgres", () => {
 		const tenantId = await newTenant();
 		const sources = new PostgresAlertSourceRepository(pool);
 		const alerts = new PostgresAlertRepository(pool);
-		const source = (await sources.create(
-			tenantId,
-			newSource("prometheus"),
-			anAudit(tenantId),
-		)) as AlertSource;
+		const source = savedSource(
+			await sources.create(tenantId, newSource("prometheus"), anAudit(tenantId)),
+		);
 		const now = new Date("2030-01-01T00:00:00Z");
 		const dedupKey = `race-${randomUUID()}`;
 		const count = 8;
@@ -522,7 +522,7 @@ describe("alert source storage in postgres", () => {
 		const principal: Principal = { tenantId, userId: "user-1", role: "admin" };
 		const service = createAlertSourceService(new PostgresAlertSourceRepository(pool), box);
 
-		const created = await service.create(principal, { name: "prometheus" });
+		const created = await service.create(principal, { name: "prometheus", onCallScheduleId: null });
 		if (!created.ok) throw new Error("create failed");
 		const { source, secret } = created.value;
 

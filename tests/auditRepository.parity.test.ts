@@ -63,6 +63,8 @@ const newIncident = (): Omit<Incident, "tenantId"> => ({
 	dedupKey: null,
 	alertCount: 0,
 	lastAlertAt: null,
+	assigneeId: null,
+	assignmentCount: 0,
 });
 
 type Stores = {
@@ -181,7 +183,7 @@ describe.each([
 		const incident = newIncident();
 
 		// Same tenant and id as a stored entry: the audit_events primary key refuses it.
-		await expect(stores.incidents.create(acme, incident, { ...taken })).rejects.toThrow();
+		await expect(stores.incidents.create(acme, incident, [{ ...taken }])).rejects.toThrow();
 
 		expect(await stores.incidents.findById(acme, incident.id)).toBeNull();
 		expect((await stores.audit.list(acme, {}, page)).total).toBe(1);
@@ -189,19 +191,19 @@ describe.each([
 
 	it("writes no entry when a compare-and-set update does not apply", async () => {
 		const incident = newIncident();
-		await stores.incidents.create(acme, incident, anAudit(acme, "incident.created"));
+		await stores.incidents.create(acme, incident, [anAudit(acme, "incident.created")]);
 
 		const won = await stores.incidents.update(
 			acme,
 			incident.id,
-			"open",
+			{ status: "open", assigneeId: null },
 			{ status: "acknowledged" },
 			anAudit(acme, "incident.acknowledged"),
 		);
 		const lost = await stores.incidents.update(
 			acme,
 			incident.id,
-			"open",
+			{ status: "open", assigneeId: null },
 			{ status: "acknowledged" },
 			anAudit(acme, "incident.acknowledged"),
 		);

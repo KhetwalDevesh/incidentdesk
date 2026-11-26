@@ -5,10 +5,13 @@ import {
 	AlertListQuerySchema,
 	AlertListSchema,
 	AlertPayloadSchema,
+	AlertSourceIdSchema,
 	AlertSourceListSchema,
+	AlertSourceSchema,
 	AlertWebhookHeadersSchema,
 	CreateAlertSourceRequestSchema,
 	CreatedAlertSourceSchema,
+	UpdateAlertSourceRequestSchema,
 } from "./alerts";
 import { AuditEventListSchema, AuditEventQuerySchema } from "./audit";
 import {
@@ -18,7 +21,12 @@ import {
 	SignupRequestSchema,
 } from "./auth";
 import { PageQuerySchema, ProblemSchema } from "./common";
-import { CreateIncidentRequestSchema, IncidentListSchema, IncidentSchema } from "./incidents";
+import {
+	AssignIncidentRequestSchema,
+	CreateIncidentRequestSchema,
+	IncidentListSchema,
+	IncidentSchema,
+} from "./incidents";
 import {
 	AddMemberRequestSchema,
 	BulkRemoveMembersRequestSchema,
@@ -36,6 +44,20 @@ import {
 	NotificationChannelSchema,
 	NotificationDeliveryListSchema,
 } from "./notificationChannels";
+import {
+	CreateOnCallOverrideRequestSchema,
+	CreateOnCallScheduleRequestSchema,
+	OnCallOverrideIdSchema,
+	OnCallOverrideListQuerySchema,
+	OnCallOverrideListSchema,
+	OnCallOverrideSchema,
+	OnCallQuerySchema,
+	OnCallScheduleIdSchema,
+	OnCallScheduleListSchema,
+	OnCallScheduleSchema,
+	OnCallSchema,
+	UpdateOnCallScheduleRequestSchema,
+} from "./onCall";
 
 const registry = new OpenAPIRegistry();
 const bearer = registry.registerComponent("securitySchemes", "bearerAuth", {
@@ -115,7 +137,7 @@ registry.registerPath({
 	responses: {
 		200: json(IncidentSchema, "The acknowledged incident"),
 		...authErrors,
-		403: problem("Role cannot acknowledge incidents"),
+		403: problem("The incident is assigned to someone else, and the caller is not an admin"),
 		404: problem("No such incident in this tenant"),
 		409: problem("Incident is not open"),
 		422: problem("Id is not a UUID"),
@@ -131,10 +153,31 @@ registry.registerPath({
 	responses: {
 		200: json(IncidentSchema, "The resolved incident"),
 		...authErrors,
-		403: problem("Role cannot resolve incidents"),
+		403: problem("The incident is assigned to someone else, and the caller is not an admin"),
 		404: problem("No such incident in this tenant"),
 		409: problem("Incident is already resolved, or changed while resolving"),
 		422: problem("Id is not a UUID"),
+	},
+});
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/incidents/{id}/assign",
+	summary: "Reassign an unresolved incident to a member, or unassign it",
+	description:
+		"Any member may reassign to any member of the tenant, themself included. Only an admin may unassign (null). Assigning the current assignee changes nothing.",
+	security,
+	request: {
+		params: z.object({ id: z.uuid() }),
+		body: { content: { "application/json": { schema: AssignIncidentRequestSchema } } },
+	},
+	responses: {
+		200: json(IncidentSchema, "The incident with its new assignee"),
+		...authErrors,
+		403: problem("Only an admin can unassign an incident"),
+		404: problem("No such incident or member in this tenant"),
+		409: problem("Incident is resolved, or changed while reassigning"),
+		422: problem("Id or body failed validation"),
 	},
 });
 
@@ -210,12 +253,12 @@ registry.registerPath({
 	method: "get",
 	path: "/v1/members",
 	summary: "List members of the caller's tenant",
+	description: "Every member may list their tenant's members.",
 	security,
 	request: { query: PageQuerySchema },
 	responses: {
 		200: json(MemberListSchema, "A page of members"),
 		...authErrors,
-		403: problem("Only admins can list members"),
 		422: problem("Query failed validation"),
 	},
 });
@@ -384,6 +427,176 @@ registry.registerPath({
 		403: problem("Only admins can add alert sources"),
 		409: problem("The tenant already has a source with this name"),
 		422: problem("Request body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "patch",
+	path: "/v1/alert-sources/{id}",
+	summary: "Link an alert source to an on-call schedule, or unlink it",
+	security,
+	request: {
+		params: z.object({ id: AlertSourceIdSchema }),
+		body: { content: { "application/json": { schema: UpdateAlertSourceRequestSchema } } },
+	},
+	responses: {
+		200: json(AlertSourceSchema, "The alert source"),
+		...authErrors,
+		403: problem("Only admins can change alert sources"),
+		404: problem("No such alert source or schedule in this tenant"),
+		422: problem("Id or body failed validation"),
+	},
+});
+
+// On-call schedules. Spec: docs/features/on-call-schedules.md.
+const scheduleParams = z.object({ id: OnCallScheduleIdSchema });
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/on-call-schedules",
+	summary: "Create an on-call schedule",
+	security,
+	request: {
+		body: { content: { "application/json": { schema: CreateOnCallScheduleRequestSchema } } },
+	},
+	responses: {
+		201: json(OnCallScheduleSchema, "Schedule created"),
+		...authErrors,
+		403: problem("Only admins can manage on-call schedules"),
+		404: problem("A participant is not a member of the tenant"),
+		409: problem("The tenant already has a schedule with this name"),
+		422: problem("Request body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/on-call-schedules",
+	summary: "List the caller's tenant's on-call schedules, by name",
+	security,
+	request: { query: PageQuerySchema },
+	responses: {
+		200: json(OnCallScheduleListSchema, "A page of schedules"),
+		...authErrors,
+		422: problem("Query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/on-call-schedules/{id}",
+	summary: "Get one on-call schedule",
+	security,
+	request: { params: scheduleParams },
+	responses: {
+		200: json(OnCallScheduleSchema, "The schedule"),
+		...authErrors,
+		404: problem("No such schedule in this tenant"),
+		422: problem("Id is not a UUID"),
+	},
+});
+
+registry.registerPath({
+	method: "patch",
+	path: "/v1/on-call-schedules/{id}",
+	summary: "Change an on-call schedule",
+	description:
+		"Changes who is on call from now on. Incidents already assigned keep their assignee.",
+	security,
+	request: {
+		params: scheduleParams,
+		body: { content: { "application/json": { schema: UpdateOnCallScheduleRequestSchema } } },
+	},
+	responses: {
+		200: json(OnCallScheduleSchema, "The schedule"),
+		...authErrors,
+		403: problem("Only admins can manage on-call schedules"),
+		404: problem("No such schedule in this tenant, or a participant is not a member"),
+		409: problem("The tenant already has a schedule with this name"),
+		422: problem("Id or body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "delete",
+	path: "/v1/on-call-schedules/{id}",
+	summary: "Delete an on-call schedule with its rotation and overrides",
+	description: "Linked alert sources are unlinked. Incidents keep their assignee.",
+	security,
+	request: { params: scheduleParams },
+	responses: {
+		204: { description: "Schedule deleted" },
+		...authErrors,
+		403: problem("Only admins can manage on-call schedules"),
+		404: problem("No such schedule in this tenant"),
+		422: problem("Id is not a UUID"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/on-call-schedules/{id}/on-call",
+	summary: "Who is on call at a time, now by default",
+	security,
+	request: { params: scheduleParams, query: OnCallQuerySchema },
+	responses: {
+		200: json(OnCallSchema, "Who is on call"),
+		...authErrors,
+		404: problem("No such schedule in this tenant"),
+		422: problem("Id or query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/on-call-schedules/{id}/overrides",
+	summary: "Put a member on call for a time range",
+	description:
+		"A responder may add an override only for themself. An admin may add one for anyone.",
+	security,
+	request: {
+		params: scheduleParams,
+		body: { content: { "application/json": { schema: CreateOnCallOverrideRequestSchema } } },
+	},
+	responses: {
+		201: json(OnCallOverrideSchema, "Override added"),
+		...authErrors,
+		403: problem("A responder may only add an override for themself"),
+		404: problem("No such schedule or member in this tenant"),
+		409: problem("The override overlaps another override in this schedule"),
+		422: problem("Id or body failed validation, or the override has already ended"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/on-call-schedules/{id}/overrides",
+	summary: "List a schedule's overrides ending after `from`, by start time",
+	security,
+	request: { params: scheduleParams, query: OnCallOverrideListQuerySchema },
+	responses: {
+		200: json(OnCallOverrideListSchema, "A page of overrides"),
+		...authErrors,
+		404: problem("No such schedule in this tenant"),
+		422: problem("Id or query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "delete",
+	path: "/v1/on-call-schedules/{id}/overrides/{overrideId}",
+	summary: "Remove an override",
+	description: "A responder may remove only their own override. An admin may remove any.",
+	security,
+	request: {
+		params: z.object({ id: OnCallScheduleIdSchema, overrideId: OnCallOverrideIdSchema }),
+	},
+	responses: {
+		204: { description: "Override removed" },
+		...authErrors,
+		403: problem("A responder may only remove their own override"),
+		404: problem("No such override in this schedule"),
+		422: problem("Id is not a UUID"),
 	},
 });
 

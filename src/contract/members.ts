@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { EmailSchema } from "./auth";
 
-export const MEMBER_ROLES = ["viewer", "responder", "admin"] as const;
+// The viewer role was removed: docs/features/on-call-schedules.md.
+export const MEMBER_ROLES = ["responder", "admin"] as const;
 export const MEMBER_STATUSES = ["pending", "active"] as const;
 
 export const AddMemberRequestSchema = z
@@ -25,7 +26,7 @@ export const UpdateMemberRequestSchema = z
 export type UpdateMemberRequest = z.infer<typeof UpdateMemberRequestSchema>;
 
 // Adds an issue at each repeat of an id, so a client can find every one.
-const uniqueIds =
+export const uniqueIds =
 	<T>(idOf: (item: T) => string, path: (index: number) => (string | number)[]) =>
 	(items: T[], ctx: z.RefinementCtx) => {
 		const seen = new Set<string>();

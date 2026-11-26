@@ -185,9 +185,8 @@ describe("slack delivery contract", () => {
 	it("lets only admins list deliveries", async () => {
 		const channel = await addChannel();
 		const responder = await join("grace@acme.example", "responder");
-		const viewer = await join("linus@acme.example", "viewer");
 
-		for (const token of [responder.token, viewer.token]) {
+		for (const token of [responder.token]) {
 			const res = await system.app.request(
 				`/v1/notification-channels/${channel}/deliveries`,
 				authed(token),
@@ -209,6 +208,72 @@ describe("slack delivery contract", () => {
 			expect(res.status).toBe(status);
 			ProblemSchema.parse(await res.json());
 		}
+	});
+
+	// Spec: docs/features/on-call-schedules.md, "Slack message".
+	describe("on-call assignment", () => {
+		const schedule = async (participants: string[]) => {
+			const res = await system.app.request(
+				"/v1/on-call-schedules",
+				authed(admin, {
+					name: "Payments",
+					timeZone: "UTC",
+					handoffTime: "00:00",
+					rotationDays: 7,
+					startsOn: "2020-01-06",
+					participants,
+					isDefault: true,
+				}),
+			);
+			expect(res.status).toBe(201);
+		};
+
+		const assign = (id: string, token: string, assigneeId: string | null) =>
+			system.app.request(`/v1/incidents/${id}/assign`, authed(token, { assigneeId }));
+
+		it("names the assignee when an incident opens, and drops the email once posted", async () => {
+			const grace = await join("grace@acme.example", "responder");
+			await addChannel();
+			await schedule([grace.id]);
+
+			await openIncident(admin);
+			await work();
+
+			expect(system.sender.texts[0]).toMatch(/\nAssigned to grace@acme\.example$/);
+			expect(JSON.stringify(system.deliveries.allSync())).not.toContain("grace@acme.example");
+		});
+
+		it("says Unassigned when nobody is on call", async () => {
+			await addChannel();
+
+			await openIncident(admin);
+			await work();
+
+			expect(system.sender.texts[0]).toMatch(/\nUnassigned$/);
+		});
+
+		it("posts each reassignment once, naming both people, and a no-op not at all", async () => {
+			const grace = await join("grace@acme.example", "responder");
+			const alan = await join("alan@acme.example", "responder");
+			const channel = await addChannel();
+			await schedule([grace.id]);
+			const id = await openIncident(admin);
+
+			await assign(id, grace.token, alan.id);
+			await assign(id, alan.token, alan.id);
+			await assign(id, admin, null);
+			await work();
+
+			expect(system.sender.texts.slice(1)).toEqual([
+				expect.stringMatching(
+					/^👤 SEV1 incident reassigned: Checkout is down\nReassigned to alan@acme\.example by grace@acme\.example · incident /,
+				),
+				expect.stringMatching(/\nUnassigned by ada@acme\.example · incident /),
+			]);
+			const listed = await deliveries(channel);
+			expect(listed.items.filter((d) => d.event === "incident.reassigned")).toHaveLength(2);
+			expect(JSON.stringify(system.deliveries.allSync())).not.toMatch(/(alan|grace)@acme/);
+		});
 	});
 
 	it("still changes the incident when the notification queue is down", async () => {

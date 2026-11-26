@@ -1,5 +1,9 @@
 import { Hono } from "hono";
-import { CreateAlertSourceRequestSchema } from "../contract/alerts";
+import {
+	AlertSourceIdSchema,
+	CreateAlertSourceRequestSchema,
+	UpdateAlertSourceRequestSchema,
+} from "../contract/alerts";
 import { PageQuerySchema } from "../contract/common";
 import type { AlertSourceService } from "../domain/alerts/types";
 import { problemResponse, respond, validationError } from "../http/problem";
@@ -25,4 +29,16 @@ export const alertSourceRoutes = (service: AlertSourceService) =>
 				requestId: c.get("requestId"),
 			});
 			return respond(c, result, (created) => c.json(toCreatedAlertSourceResponse(created), 201));
+		})
+		// Spec: docs/features/on-call-schedules.md.
+		.patch("/:id", async (c) => {
+			const id = AlertSourceIdSchema.safeParse(c.req.param("id"));
+			if (!id.success) return problemResponse(c, validationError(id.error));
+			const parsed = UpdateAlertSourceRequestSchema.safeParse(await c.req.json().catch(() => null));
+			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
+
+			const result = await service.update(c.get("principal"), id.data, parsed.data, {
+				requestId: c.get("requestId"),
+			});
+			return respond(c, result, (source) => c.json(toAlertSourceResponse(source)));
 		});

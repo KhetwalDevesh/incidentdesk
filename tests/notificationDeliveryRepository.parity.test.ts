@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { IncidentId, IncidentSeverity } from "../src/contract/incidents";
-import type {
-	AlertRepository,
-	AlertSource,
-	AlertSourceRepository,
-} from "../src/domain/alerts/types";
+import type { AlertRepository, AlertSourceRepository } from "../src/domain/alerts/types";
 import type { Incident, IncidentRepository } from "../src/domain/incidents/types";
 import type {
 	DeliveryNotice,
@@ -31,6 +27,7 @@ import { PostgresNotificationChannelRepository } from "../src/repository/notific
 import { PostgresNotificationDeliveryRepository } from "../src/repository/notifications/postgresNotificationDeliveryRepository";
 import { runMigrations } from "../src/repository/postgres/migrate";
 import { anAudit, groupingAudit } from "./auditEntries";
+import { savedSource } from "./outcomes";
 
 // Spec: docs/features/slack-delivery.md
 const TEST_DATABASE_URL =
@@ -103,6 +100,8 @@ const newIncident = (severity: IncidentSeverity = "sev2"): Omit<Incident, "tenan
 	dedupKey: null,
 	alertCount: 0,
 	lastAlertAt: null,
+	assigneeId: null,
+	assignmentCount: 0,
 });
 
 const noticeFor = (
@@ -200,7 +199,7 @@ describe.each([
 		await stores.incidents.create(
 			acme,
 			incident,
-			anAudit(acme),
+			[anAudit(acme)],
 			noticeFor(incident, "incident.opened", at(), email),
 		);
 		const [delivery] = await deliveriesOf(acme, channel);
@@ -218,13 +217,14 @@ describe.each([
 			const incident = newIncident("sev2");
 			const notice = noticeFor(incident);
 
-			await stores.incidents.create(acme, incident, anAudit(acme), notice);
+			await stores.incidents.create(acme, incident, [anAudit(acme)], notice);
 
 			const [delivery] = await deliveriesOf(acme, everything);
 			expect(delivery).toEqual({
 				id: expect.any(String),
 				tenantId: acme,
 				channelId: everything.id,
+				occurrence: 0,
 				incidentId: incident.id,
 				event: "incident.opened",
 				payload: notice.payload,
@@ -247,12 +247,12 @@ describe.each([
 		it("writes an update's deliveries only when the update applies", async () => {
 			const channel = await addChannel(acme, "#incidents");
 			const incident = newIncident();
-			await stores.incidents.create(acme, incident, anAudit(acme));
+			await stores.incidents.create(acme, incident, [anAudit(acme)]);
 
 			const lost = await stores.incidents.update(
 				acme,
 				incident.id,
-				"acknowledged",
+				{ status: "acknowledged", assigneeId: null },
 				{ status: "resolved" },
 				anAudit(acme),
 				noticeFor(incident, "incident.resolved"),
@@ -260,7 +260,7 @@ describe.each([
 			const won = await stores.incidents.update(
 				acme,
 				incident.id,
-				"open",
+				{ status: "open", assigneeId: null },
 				{ status: "acknowledged" },
 				anAudit(acme),
 				noticeFor(incident, "incident.acknowledged"),
@@ -276,13 +276,13 @@ describe.each([
 		it("ignores a repeated notice for the same incident event", async () => {
 			const channel = await addChannel(acme, "#incidents");
 			const incident = newIncident();
-			await stores.incidents.create(acme, incident, anAudit(acme));
+			await stores.incidents.create(acme, incident, [anAudit(acme)]);
 
 			for (let n = 0; n < 2; n++) {
 				await stores.incidents.update(
 					acme,
 					incident.id,
-					"open",
+					{ status: "open", assigneeId: null },
 					{},
 					anAudit(acme),
 					noticeFor(incident, "incident.acknowledged"),
@@ -295,9 +295,9 @@ describe.each([
 		it("writes nothing without a notice, or for a tenant with no channels", async () => {
 			const channel = await addChannel(acme, "#incidents");
 			const quiet = newIncident();
-			await stores.incidents.create(acme, quiet, anAudit(acme));
+			await stores.incidents.create(acme, quiet, [anAudit(acme)]);
 			const elsewhere = newIncident();
-			await stores.incidents.create(globex, elsewhere, anAudit(globex), noticeFor(elsewhere));
+			await stores.incidents.create(globex, elsewhere, [anAudit(globex)], noticeFor(elsewhere));
 
 			expect(await deliveriesOf(acme, channel)).toEqual([]);
 			expect(await stores.deliveries.listUnsent(globex, elsewhere.id, "incident.opened")).toEqual(
@@ -307,17 +307,20 @@ describe.each([
 
 		it("writes deliveries for an alert that opens an incident, and none for one that joins it", async () => {
 			const channel = await addChannel(acme, "#incidents");
-			const source = (await stores.sources.create(
-				acme,
-				{
-					id: randomUUID(),
-					name: "prometheus",
-					secretCiphertext: Buffer.from([1]),
-					secretHint: "WXYZ",
-					createdAt: at(),
-				},
-				anAudit(acme),
-			)) as AlertSource;
+			const source = savedSource(
+				await stores.sources.create(
+					acme,
+					{
+						id: randomUUID(),
+						name: "prometheus",
+						secretCiphertext: Buffer.from([1]),
+						secretHint: "WXYZ",
+						onCallScheduleId: null,
+						createdAt: at(),
+					},
+					anAudit(acme),
+				),
+			);
 			const enqueue = () =>
 				stores.alerts.enqueue(acme, {
 					id: randomUUID(),
@@ -368,7 +371,7 @@ describe.each([
 			const channel = await addChannel(acme, "#incidents");
 			await addChannel(acme, "#oncall");
 			const incident = newIncident();
-			await stores.incidents.create(acme, incident, anAudit(acme), noticeFor(incident));
+			await stores.incidents.create(acme, incident, [anAudit(acme)], noticeFor(incident));
 
 			const unsent = await stores.deliveries.listUnsent(acme, incident.id, "incident.opened");
 			expect(unsent).toHaveLength(2);
@@ -420,6 +423,65 @@ describe.each([
 			});
 			expect(JSON.stringify(stored)).not.toContain("grace@acme.example");
 			expect(await stores.deliveries.startAttempt(acme, delivery.id, at(70_000), at(1))).toBeNull();
+		});
+
+		// Spec: docs/features/on-call-schedules.md, "Slack message".
+		it("removes the assignee's email too, and leaves an unassigned payload as it was", async () => {
+			const channel = await addChannel(acme, "#incidents");
+			const assigned = newIncident();
+			const unassigned = newIncident();
+			const withAssignee = (incident: typeof assigned, assignee: { email: string } | null) => {
+				const notice = noticeFor(incident);
+				return { ...notice, payload: { ...notice.payload, assignee } };
+			};
+			await stores.incidents.create(
+				acme,
+				assigned,
+				[anAudit(acme)],
+				withAssignee(assigned, { email: "alan@acme.example" }),
+			);
+			await stores.incidents.create(
+				acme,
+				unassigned,
+				[anAudit(acme)],
+				withAssignee(unassigned, null),
+			);
+
+			for (const delivery of await deliveriesOf(acme, channel)) {
+				await stores.deliveries.deliver(acme, delivery.id, 200, at(5));
+			}
+
+			const stored = await deliveriesOf(acme, channel);
+			expect(
+				Object.fromEntries(
+					stored.map((delivery) => [delivery.incidentId, delivery.payload.assignee]),
+				),
+			).toEqual({ [assigned.id]: { email: null }, [unassigned.id]: null });
+			expect(JSON.stringify(stored)).not.toMatch(/(alan|grace)@acme\.example/);
+		});
+
+		it("keeps each occurrence of an event as its own delivery, and a repeat of one as one", async () => {
+			const channel = await addChannel(acme, "#incidents");
+			const incident = newIncident();
+			await stores.incidents.create(acme, incident, [anAudit(acme)]);
+			const reassigned = (occurrence: number) => ({
+				...noticeFor(incident, "incident.reassigned"),
+				occurrence,
+			});
+
+			for (const occurrence of [1, 2, 2]) {
+				await stores.incidents.update(
+					acme,
+					incident.id,
+					{ status: "open", assigneeId: null },
+					{},
+					anAudit(acme),
+					reassigned(occurrence),
+				);
+			}
+
+			const stored = await deliveriesOf(acme, channel);
+			expect(stored.map((delivery) => delivery.occurrence).sort()).toEqual([1, 2]);
 		});
 
 		it("marks a delivery failed with its reason and removes the actor's email", async () => {
@@ -481,11 +543,11 @@ describe.each([
 	it("lists a channel's deliveries newest first, with a total, for its tenant only", async () => {
 		const channel = await addChannel(acme, "#incidents");
 		const incident = newIncident();
-		await stores.incidents.create(acme, incident, anAudit(acme), noticeFor(incident));
+		await stores.incidents.create(acme, incident, [anAudit(acme)], noticeFor(incident));
 		await stores.incidents.update(
 			acme,
 			incident.id,
-			"open",
+			{ status: "open", assigneeId: null },
 			{ status: "acknowledged" },
 			anAudit(acme),
 			noticeFor(incident, "incident.acknowledged", at(1000)),
@@ -506,7 +568,7 @@ describe.each([
 		const globexChannel = await addChannel(globex, "#incidents");
 		const unsent = await oneDelivery(acmeChannel);
 		const sentIncident = newIncident();
-		await stores.incidents.create(globex, sentIncident, anAudit(globex), noticeFor(sentIncident));
+		await stores.incidents.create(globex, sentIncident, [anAudit(globex)], noticeFor(sentIncident));
 		const [sent] = await deliveriesOf(globex, globexChannel);
 		await stores.deliveries.markSent(globex, sent?.id ?? "", at());
 
@@ -541,7 +603,7 @@ describe.each([
 			await stores.incidents.create(
 				acme,
 				incident,
-				anAudit(acme),
+				[anAudit(acme)],
 				noticeFor(incident, "incident.opened", at(offset)),
 			);
 		}

@@ -32,9 +32,30 @@ export type AuditDetails = {
 	"incident.created": { title: string; severity: string };
 	"incident.acknowledged": Record<string, never>;
 	"incident.resolved": Record<string, never>;
+	// Member ids, or "none". manual is "true" for a reassignment, "false" at opening.
+	"incident.assigned": { from: string; to: string; manual: "true" | "false" };
 	"alert.grouped": { alertId: string; dedupKey: string };
 	"alert_source.created": { name: string };
+	// A schedule id, or "none".
+	"alert_source.updated": { onCallScheduleId: string };
 	"notification_channel.created": { name: string; type: string };
+	"on_call_schedule.created": { name: string };
+	// changed lists the request's fields, comma-separated.
+	"on_call_schedule.updated": { name: string; changed: string };
+	"on_call_schedule.deleted": { name: string };
+	// The resource is the schedule. Ids and times only: never the member's email.
+	"on_call_override.created": {
+		overrideId: string;
+		userId: string;
+		startsAt: string;
+		endsAt: string;
+	};
+	"on_call_override.deleted": {
+		overrideId: string;
+		userId: string;
+		startsAt: string;
+		endsAt: string;
+	};
 };
 
 export type AuditEntry = {

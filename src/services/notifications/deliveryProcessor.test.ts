@@ -130,8 +130,10 @@ const setup = () => {
 			dedupKey: null,
 			alertCount: 3,
 			lastAlertAt: null,
+			assigneeId: null,
+			assignmentCount: 0,
 		};
-		await incidents.create(tenant, incident, anAudit(tenant), {
+		await incidents.create(tenant, incident, [anAudit(tenant)], {
 			incidentId: incident.id,
 			event,
 			severity: incident.severity,
@@ -517,6 +519,56 @@ describe("Slack message", () => {
 		expect(slackMessage("incident.resolved", id, payload).text).toBe(
 			"🟢 SEV1 incident resolved: Checkout is down\nResolved by grace@acme.example after 2m 39s · incident 7c9e6679",
 		);
+	});
+
+	// Spec: docs/features/on-call-schedules.md, "Slack message".
+	describe("assignee", () => {
+		const payload = {
+			title: "Checkout is down",
+			severity: "sev1" as const,
+			actor: { type: "user" as const, email: "ada@acme.example" },
+			alertCount: 0,
+			openedAt: start.toISOString(),
+			occurredAt: start.toISOString(),
+		};
+		const id = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+		const opened =
+			"🔴 SEV1 incident opened: Checkout is down\nOpened by ada@acme.example · incident 7c9e6679";
+
+		it("names the assignee in the opened message, or says it is unassigned", () => {
+			const assigned = { ...payload, assignee: { email: "grace@acme.example" } };
+
+			expect(slackMessage("incident.opened", id, assigned).text).toBe(
+				`${opened}\nAssigned to grace@acme.example`,
+			);
+			expect(slackMessage("incident.opened", id, { ...payload, assignee: null }).text).toBe(
+				`${opened}\nUnassigned`,
+			);
+			// Recorded before assignment existed: no line at all.
+			expect(slackMessage("incident.opened", id, payload).text).toBe(opened);
+		});
+
+		it("says who reassigned it to whom, or who unassigned it", () => {
+			const reassigned = { ...payload, assignee: { email: "alan@acme.example" } };
+
+			expect(slackMessage("incident.reassigned", id, reassigned).text).toBe(
+				"👤 SEV1 incident reassigned: Checkout is down\nReassigned to alan@acme.example by ada@acme.example · incident 7c9e6679",
+			);
+			expect(slackMessage("incident.reassigned", id, { ...payload, assignee: null }).text).toBe(
+				"👤 SEV1 incident reassigned: Checkout is down\nUnassigned by ada@acme.example · incident 7c9e6679",
+			);
+		});
+
+		it("escapes the assignee, and names a removed one without their email", () => {
+			const sneaky = { ...payload, assignee: { email: "<!channel>@acme.example" } };
+
+			expect(slackMessage("incident.reassigned", id, sneaky).text).toContain(
+				"Reassigned to &lt;!channel&gt;@acme.example",
+			);
+			expect(
+				slackMessage("incident.opened", id, { ...payload, assignee: { email: null } }).text,
+			).toContain("Assigned to a removed member");
+		});
 	});
 
 	it.each([

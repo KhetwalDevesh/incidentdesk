@@ -1,6 +1,6 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { runMigrations } from "../src/repository/postgres/migrate";
@@ -58,5 +58,56 @@ describe("runMigrations", () => {
 		expect(await tableExists("half")).toBe(false);
 		const { rows } = await pool.query("SELECT version FROM schema_migrations");
 		expect(rows.map((row) => row.version)).toEqual(["0001_create_a.sql"]);
+	});
+
+	// Spec: docs/features/on-call-schedules.md. 0013 is the expand step that removes viewers.
+	it("turns every viewer into a responder, auditing each change with no actor", async () => {
+		const real = resolve(import.meta.dirname, "../db/migrations");
+		const files = (await readdir(real)).filter((name) => name.endsWith(".sql")).sort();
+		const upTo = async (last: string) =>
+			migrationsDir(
+				Object.fromEntries(
+					await Promise.all(
+						files
+							.filter((name) => name <= last)
+							.map(async (name) => [name, await readFile(join(real, name), "utf8")]),
+					),
+				),
+			);
+		await runMigrations(pool, await upTo("0012_create_on_call_schedules.sql"));
+		const tenant = "00000000-0000-4000-8000-0000000000aa";
+		await pool.query("INSERT INTO tenants (id, name, created_at) VALUES ($1, 'Acme', now())", [
+			tenant,
+		]);
+		const users: [string, string][] = [
+			["00000000-0000-4000-8000-000000000001", "viewer"],
+			["00000000-0000-4000-8000-000000000002", "responder"],
+			["00000000-0000-4000-8000-000000000003", "admin"],
+		];
+		for (const [id, role] of users) {
+			await pool.query(
+				"INSERT INTO users (tenant_id, id, email, role, created_at) VALUES ($1, $2, $3, $4, now())",
+				[tenant, id, `${role}@acme.example`, role],
+			);
+		}
+
+		await runMigrations(pool, await upTo("0013_remove_viewer_role.sql"));
+
+		const roles = await pool.query("SELECT id, role FROM users ORDER BY id");
+		expect(roles.rows.map((row) => row.role)).toEqual(["responder", "responder", "admin"]);
+		const audit = await pool.query(
+			"SELECT tenant_id, actor_type, actor_id, action, resource_type, resource_id, details FROM audit_events",
+		);
+		expect(audit.rows).toEqual([
+			{
+				tenant_id: tenant,
+				actor_type: "anonymous",
+				actor_id: null,
+				action: "member.role_changed",
+				resource_type: "user",
+				resource_id: "00000000-0000-4000-8000-000000000001",
+				details: { from: "viewer", to: "responder" },
+			},
+		]);
 	});
 });

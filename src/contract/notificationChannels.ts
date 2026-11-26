@@ -51,6 +51,8 @@ export const NOTIFICATION_EVENTS = [
 	"incident.opened",
 	"incident.acknowledged",
 	"incident.resolved",
+	// Spec: docs/features/on-call-schedules.md.
+	"incident.reassigned",
 ] as const;
 export const DELIVERY_STATES = ["pending", "delivered", "failed"] as const;
 export const DELIVERY_FAILURE_REASONS = ["rejected", "unavailable", "host_not_allowed"] as const;

@@ -28,6 +28,7 @@ import { InMemoryAuditStore } from "../src/repository/audit/inMemoryAuditStore";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { InMemoryNotificationDeliveryRepository } from "../src/repository/notifications/inMemoryNotificationDeliveryRepository";
+import { InMemoryOnCallRepository } from "../src/repository/onCall/inMemoryOnCallRepository";
 import { createAlertIngestService } from "../src/services/alerts/alertIngestService";
 import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
 import { createAlertService } from "../src/services/alerts/alertService";
@@ -39,6 +40,8 @@ import { createMemberService } from "../src/services/members/memberService";
 import { createDeliveryDispatcher } from "../src/services/notifications/deliveryDispatcher";
 import { createDeliveryProcessor } from "../src/services/notifications/deliveryProcessor";
 import { createNotificationChannelService } from "../src/services/notifications/notificationChannelService";
+import { createOnCallAssigner } from "../src/services/onCall/onCallAssigner";
+import { createOnCallScheduleService } from "../src/services/onCall/onCallScheduleService";
 
 export const TEST_JWT_SECRET = "test-secret-that-is-at-least-32-characters";
 // 32 zero bytes. Tests only.
@@ -47,7 +50,7 @@ export const TEST_ENCRYPTION_KEY = Buffer.alloc(32).toString("base64");
 // Fixed tokens for tests about incidents, so they need no signup. Real JWTs work alongside them.
 const FIXED_TOKENS: Record<string, Principal> = {
 	"acme-responder": { tenantId: "tenant-acme" as TenantId, userId: "user-1", role: "responder" },
-	"acme-viewer": { tenantId: "tenant-acme" as TenantId, userId: "user-2", role: "viewer" },
+	"acme-responder-2": { tenantId: "tenant-acme" as TenantId, userId: "user-2", role: "responder" },
 	"globex-responder": {
 		tenantId: "tenant-globex" as TenantId,
 		userId: "user-3",
@@ -119,14 +122,21 @@ export const buildTestSystem = (
 		now: options.alertNow,
 	});
 	const policy = createWebhookPolicy(TEST_WEBHOOK_ORIGINS);
-	const incidents = new InMemoryIncidentRepository(audit, deliveries);
-	const alertSources = new InMemoryAlertSourceRepository(audit);
+	const incidents = new InMemoryIncidentRepository(audit, deliveries, accounts);
+	const schedules = new InMemoryOnCallRepository(accounts);
+	const onCall = createOnCallAssigner(schedules);
+	const alertSources = new InMemoryAlertSourceRepository(audit, schedules);
 	const alerts = new InMemoryAlertRepository(incidents);
 	const queue = new InMemoryQueue<AlertRef>({ now: options.alertNow });
 	const app = createApp({
 		authenticate: async (token) => FIXED_TOKENS[token] ?? authService.authenticate(token),
 		authService,
-		incidentService: createIncidentService(incidents, { members: accounts, dispatcher }),
+		incidentService: createIncidentService(incidents, {
+			members: accounts,
+			dispatcher,
+			onCall,
+			now: options.alertNow,
+		}),
 		memberService: createMemberService(accounts),
 		notificationChannelService: createNotificationChannelService({
 			channels,
@@ -146,6 +156,7 @@ export const buildTestSystem = (
 			now: options.alertNow,
 		}),
 		auditService: createAuditService(audit, incidents),
+		onCallScheduleService: createOnCallScheduleService(schedules, options.alertNow),
 	});
 	const processor = createAlertProcessor({
 		queue,
@@ -154,6 +165,7 @@ export const buildTestSystem = (
 		now: options.alertNow,
 		sources: alertSources,
 		dispatcher,
+		onCall,
 	});
 	const sender = new FakeWebhookSender();
 	const deliveryErrors: { subject: string; error: unknown }[] = [];
@@ -171,6 +183,8 @@ export const buildTestSystem = (
 	return {
 		app,
 		processor,
+		incidents,
+		schedules,
 		alerts,
 		queue,
 		audit,
