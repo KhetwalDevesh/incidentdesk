@@ -25,8 +25,20 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 	private readonly tenants = new Map<TenantId, Tenant>();
 	private readonly users = new Map<string, User>();
 	private readonly setupTokens = new Map<string, StoredSetupToken>();
+	// Run inside removeUsers, with no await in between: the twins of the foreign keys and
+	// updates that remove a member from other tables in the same transaction.
+	readonly removalHooks: ((tenantId: TenantId, userIds: Set<string>) => void)[] = [];
 
 	constructor(readonly audit: InMemoryAuditStore = new InMemoryAuditStore()) {}
+
+	hasMemberSync(tenantId: TenantId, userId: string): boolean {
+		return this.users.get(userId)?.tenantId === tenantId;
+	}
+
+	findUserSync(tenantId: TenantId, userId: string): User | null {
+		const user = this.users.get(userId);
+		return user?.tenantId === tenantId ? user : null;
+	}
 
 	private emailTaken(email: string) {
 		return [...this.users.values()].some((user) => user.email === email);
@@ -72,6 +84,13 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 	async findUser(tenantId: TenantId, userId: string): Promise<User | null> {
 		const user = this.users.get(userId);
 		return user?.tenantId === tenantId ? user : null;
+	}
+
+	async findUsers(tenantId: TenantId, userIds: string[]): Promise<User[]> {
+		return [...new Set(userIds)].flatMap((id) => {
+			const user = this.findUserSync(tenantId, id);
+			return user ? [user] : [];
+		});
 	}
 
 	async listUsers(tenantId: TenantId, { limit, offset }: PageQuery): Promise<UserPage> {
@@ -149,6 +168,7 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 		for (const [hash, token] of this.setupTokens) {
 			if (token.tenantId === tenantId && removed.has(token.userId)) this.setupTokens.delete(hash);
 		}
+		for (const hook of this.removalHooks) hook(tenantId, removed);
 		this.audit.appendSync(entries);
 		return { applied: true, users: found.users };
 	}

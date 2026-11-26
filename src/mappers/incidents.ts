@@ -1,8 +1,8 @@
 import type { IncidentResponse } from "../contract/incidents";
-import type { Incident } from "../domain/incidents/types";
+import type { IncidentView } from "../domain/incidents/types";
 
 // The allowlist of what leaves the API. A new domain field stays private until added here.
-export const toIncidentResponse = (incident: Incident): IncidentResponse => ({
+export const toIncidentResponse = (incident: IncidentView): IncidentResponse => ({
 	id: incident.id,
 	title: incident.title,
 	severity: incident.severity,
@@ -13,4 +13,5 @@ export const toIncidentResponse = (incident: Incident): IncidentResponse => ({
 	origin: incident.alertSourceId ? "alert" : "manual",
 	alertCount: incident.alertCount,
 	lastAlertAt: incident.lastAlertAt?.toISOString() ?? null,
+	assignee: incident.assignee ? { id: incident.assignee.id, email: incident.assignee.email } : null,
 });

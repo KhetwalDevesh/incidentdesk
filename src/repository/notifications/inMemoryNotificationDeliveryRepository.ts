@@ -20,8 +20,14 @@ import { InMemoryNotificationChannelRepository } from "./inMemoryNotificationCha
 
 const compareIds = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-const withoutEmail = (payload: DeliveryPayload): DeliveryPayload =>
-	payload.actor.type === "user" ? { ...payload, actor: { type: "user", email: null } } : payload;
+// The twin of WITHOUT_EMAIL in the Postgres repository.
+const withoutEmail = (payload: DeliveryPayload): DeliveryPayload => {
+	const stripped =
+		payload.actor.type === "user"
+			? { ...payload, actor: { type: "user" as const, email: null } }
+			: payload;
+	return stripped.assignee ? { ...stripped, assignee: { email: null } } : stripped;
+};
 
 // The twin of the Postgres repository. The incident and alert repositories call insertSync
 // inside their own change, with no await in between, so the change and its deliveries are
@@ -45,7 +51,8 @@ export class InMemoryNotificationDeliveryRepository
 					delivery.tenantId === tenantId &&
 					delivery.channelId === channel.id &&
 					delivery.incidentId === notice.incidentId &&
-					delivery.event === notice.event,
+					delivery.event === notice.event &&
+					delivery.occurrence === (notice.occurrence ?? 0),
 			);
 			if (duplicate) continue;
 			const id = this.newId();
@@ -55,6 +62,7 @@ export class InMemoryNotificationDeliveryRepository
 				channelId: channel.id,
 				incidentId: notice.incidentId,
 				event: notice.event,
+				occurrence: notice.occurrence ?? 0,
 				payload: notice.payload,
 				state: "pending",
 				attempts: 0,

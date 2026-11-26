@@ -82,12 +82,12 @@ describe("alert webhook contract", () => {
 
 	it("opens an incident only once the worker runs", async () => {
 		await send(alert);
-		const before = await system.app.request("/v1/incidents", authed("acme-viewer"));
+		const before = await system.app.request("/v1/incidents", authed("acme-responder-2"));
 		expect(IncidentListSchema.parse(await before.json()).total).toBe(0);
 
 		await system.processor.processMessages();
 
-		const after = await system.app.request("/v1/incidents", authed("acme-viewer"));
+		const after = await system.app.request("/v1/incidents", authed("acme-responder-2"));
 		expect(IncidentListSchema.parse(await after.json()).items).toMatchObject([
 			{
 				title: "DB CPU above 90%",
@@ -105,7 +105,7 @@ describe("alert webhook contract", () => {
 
 		await system.processor.processMessages();
 
-		const res = await system.app.request("/v1/incidents", authed("acme-viewer"));
+		const res = await system.app.request("/v1/incidents", authed("acme-responder-2"));
 		const page = IncidentListSchema.parse(await res.json());
 		expect(page.total).toBe(1);
 		expect(page.items[0]?.alertCount).toBe(3);

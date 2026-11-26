@@ -13,7 +13,9 @@ import type {
 import { type AuditEntry, auditEntry, auditOrigin } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { DeliveryDispatcher, DeliveryNotice } from "../../domain/notifications/types";
+import type { MemberRef, OnCallAssigner } from "../../domain/onCall/types";
 import { NO_DISPATCH } from "../notifications/deliveryDispatcher";
+import { NO_ASSIGNER } from "../onCall/onCallAssigner";
 
 // Delay before retry n+1, after attempt n fails. Attempt 5 failing marks the alert failed.
 export const ALERT_RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 600_000] as const;
@@ -44,6 +46,9 @@ export type AlertProcessorDeps = {
 	sources?: AlertSourceLookup;
 	// Sends the queue messages for that incident's Slack deliveries, after it commits.
 	dispatcher?: DeliveryDispatcher;
+	// Picks the assignee of an incident an alert opens: from the source's linked schedule, or
+	// the default. Spec: docs/features/on-call-schedules.md.
+	onCall?: OnCallAssigner;
 };
 
 const MAX_ID_LENGTH = 200;
@@ -65,13 +70,14 @@ const parseRef = (body: string): AlertRef | null => {
 		: null;
 };
 
-// The worker's entries: an incident the alert opened, and the alert joining it. A resolved
-// alert that found no incident changed nothing, so it writes none.
+// The worker's entries: an incident the alert opened and its assignment, and the alert joining
+// it. A resolved alert that found no incident changed nothing, so it writes none.
 const groupingAudit = (
 	alert: Alert,
 	incidentId: string | null,
 	opened: boolean,
 	at: Date,
+	assignee: MemberRef | null,
 ): AuditEntry[] => {
 	if (!incidentId) return [];
 	const source = { type: "alert_source", id: alert.sourceId } as const;
@@ -86,6 +92,15 @@ const groupingAudit = (
 			title: alert.title,
 			severity: alert.severity,
 		}),
+		...(assignee
+			? [
+					auditEntry(auditOrigin(at), alert.tenantId, "incident.assigned", source, incident, {
+						from: "none",
+						to: assignee.userId,
+						manual: "false",
+					}),
+				]
+			: []),
 		grouped,
 	];
 };
@@ -95,7 +110,12 @@ const errorText = (error: unknown) =>
 
 // A firing alert may open an incident. A resolved one only attaches to an existing one:
 // people resolve incidents, alerts do not.
-const candidateFor = (alert: Alert, id: string, at: Date): Omit<Incident, "tenantId"> | null =>
+const candidateFor = (
+	alert: Alert,
+	id: string,
+	at: Date,
+	assignee: MemberRef | null,
+): Omit<Incident, "tenantId"> | null =>
 	alert.status === "firing"
 		? {
 				id: id as IncidentId,
@@ -112,6 +132,8 @@ const candidateFor = (alert: Alert, id: string, at: Date): Omit<Incident, "tenan
 				dedupKey: alert.dedupKey,
 				alertCount: 1,
 				lastAlertAt: alert.receivedAt,
+				assigneeId: assignee?.userId ?? null,
+				assignmentCount: 0,
 			}
 		: null;
 
@@ -119,6 +141,7 @@ const candidateFor = (alert: Alert, id: string, at: Date): Omit<Incident, "tenan
 const openedNotice = (
 	candidate: Omit<Incident, "tenantId">,
 	sourceName: string,
+	assignee: MemberRef | null,
 ): DeliveryNotice => ({
 	incidentId: candidate.id,
 	event: "incident.opened",
@@ -131,6 +154,7 @@ const openedNotice = (
 		alertCount: candidate.alertCount,
 		openedAt: candidate.createdAt.toISOString(),
 		occurredAt: candidate.createdAt.toISOString(),
+		assignee: assignee ? { email: assignee.email } : null,
 	},
 });
 
@@ -147,11 +171,12 @@ export const createAlertProcessor = ({
 	onError = () => undefined,
 	sources,
 	dispatcher = NO_DISPATCH,
+	onCall = NO_ASSIGNER,
 }: AlertProcessorDeps): AlertProcessor => {
 	// findForIngest runs across tenants, so the source must belong to the alert's tenant.
-	const sourceName = async (alert: Alert) => {
+	const sourceOf = async (alert: Alert) => {
 		const source = await sources?.findForIngest(alert.sourceId);
-		return source?.tenantId === alert.tenantId ? source.name : "unknown";
+		return source?.tenantId === alert.tenantId ? source : null;
 	};
 
 	const handle = async (message: AlertQueueMessage) => {
@@ -189,17 +214,22 @@ export const createAlertProcessor = ({
 
 		try {
 			const at = now();
-			const candidate = candidateFor(alert, newId(), at);
-			// Only a candidate can open an incident, so only then is the source's name needed.
-			const name = candidate ? await sourceName(alert) : null;
+			// Only a firing alert can open an incident, so only then are its source's name and
+			// schedule, and who is on call, needed.
+			const opens = alert.status === "firing";
+			const source = opens ? await sourceOf(alert) : null;
+			const assignee = opens
+				? await onCall.assigneeFor(alert.tenantId, source?.onCallScheduleId ?? null, at)
+				: null;
+			const candidate = candidateFor(alert, newId(), at, assignee);
+			const name = source?.name ?? "unknown";
 			const completed = await alerts.complete(
 				alert.tenantId,
 				alert.id,
 				candidate,
 				at,
-				({ incidentId, opened }) => groupingAudit(alert, incidentId, opened, at),
-				({ opened }) =>
-					opened && candidate && name !== null ? openedNotice(candidate, name) : null,
+				({ incidentId, opened }) => groupingAudit(alert, incidentId, opened, at, assignee),
+				({ opened }) => (opened && candidate ? openedNotice(candidate, name, assignee) : null),
 			);
 			// Opened means our candidate was inserted. An alert joining an incident posts nothing.
 			if (candidate && completed?.incidentId === candidate.id) {

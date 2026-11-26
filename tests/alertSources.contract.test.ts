@@ -53,9 +53,7 @@ describe("alert sources contract", () => {
 
 	it.each([
 		["no token", PATH, { method: "POST" }, 401, "UNAUTHENTICATED"],
-		["viewer creates", PATH, authed("acme-viewer", { name: "x" }), 403, "FORBIDDEN"],
 		["responder creates", PATH, authed("acme-responder", { name: "x" }), 403, "FORBIDDEN"],
-		["viewer lists", PATH, authed("acme-viewer"), 403, "FORBIDDEN"],
 		["responder lists", PATH, authed("acme-responder"), 403, "FORBIDDEN"],
 		["missing name", PATH, authed("acme-admin", {}), 422, "VALIDATION_FAILED"],
 		["blank name", PATH, authed("acme-admin", { name: "  " }), 422, "VALIDATION_FAILED"],

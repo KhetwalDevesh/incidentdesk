@@ -74,7 +74,6 @@ describe("alerts contract", () => {
 
 	it.each([
 		["no token", PATH, {}, 401, "UNAUTHENTICATED"],
-		["viewer", PATH, authed("acme-viewer"), 403, "FORBIDDEN"],
 		["responder", PATH, authed("acme-responder"), 403, "FORBIDDEN"],
 		["bad state", `${PATH}?state=lost`, authed("acme-admin"), 422, "VALIDATION_FAILED"],
 		["bad page", `${PATH}?limit=101`, authed("acme-admin"), 422, "VALIDATION_FAILED"],

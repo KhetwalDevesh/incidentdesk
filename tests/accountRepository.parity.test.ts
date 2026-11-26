@@ -40,7 +40,7 @@ const newUser = (
 ): Omit<User, "tenantId"> => ({
 	id: randomUUID(),
 	email,
-	role: "viewer",
+	role: "responder",
 	passwordHash: null,
 	createdAt: new Date("2026-01-01T00:00:00.123Z"),
 	...overrides,
@@ -60,7 +60,7 @@ describe.each([
 	beforeEach(async () => {
 		if (name === "postgres") {
 			await pool.query(
-				"TRUNCATE alerts, alert_sources, notification_deliveries, notification_channels, password_setup_tokens, users, tenants",
+				"TRUNCATE alerts, alert_sources, notification_deliveries, notification_channels, on_call_overrides, on_call_participants, on_call_schedules, password_setup_tokens, users, tenants",
 			);
 		}
 		repository = make();
@@ -250,7 +250,7 @@ describe.each([
 				[
 					{ userId: grace.id, role: "admin" },
 					{ userId: randomUUID(), role: "admin" },
-					{ userId: stranger.id, role: "viewer" },
+					{ userId: stranger.id, role: "responder" },
 				],
 				roleAudit,
 			);
@@ -261,7 +261,7 @@ describe.each([
 				rejection: { reason: "not_found", indexes: [1, 2] },
 			});
 			expect(removed).toEqual({ applied: false, rejection: { reason: "not_found", indexes: [0] } });
-			expect(await roles()).toMatchObject({ "grace@example.com": "viewer" });
+			expect(await roles()).toMatchObject({ "grace@example.com": "responder" });
 			expect(await repository.findUser(other.id, stranger.id)).not.toBeNull();
 		});
 
@@ -290,7 +290,11 @@ describe.each([
 				rejection: { reason: "last_admin" },
 			});
 			expect(
-				await repository.changeRoles(tenant.id, [{ userId: admin.id, role: "viewer" }], roleAudit),
+				await repository.changeRoles(
+					tenant.id,
+					[{ userId: admin.id, role: "responder" }],
+					roleAudit,
+				),
 			).toEqual({
 				applied: false,
 				rejection: { reason: "last_admin" },
@@ -299,7 +303,7 @@ describe.each([
 			const swap = await repository.changeRoles(
 				tenant.id,
 				[
-					{ userId: admin.id, role: "viewer" },
+					{ userId: admin.id, role: "responder" },
 					{ userId: responder.id, role: "admin" },
 				],
 				roleAudit,
@@ -307,7 +311,7 @@ describe.each([
 
 			expect(swap.applied).toBe(true);
 			expect(await roles()).toMatchObject({
-				"ada@example.com": "viewer",
+				"ada@example.com": "responder",
 				"grace@example.com": "admin",
 			});
 		});

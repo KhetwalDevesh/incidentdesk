@@ -83,7 +83,7 @@ describe("auth and members contract", () => {
 
 	it("lists members with their status", async () => {
 		const admin = await signup(app, "ada@example.com");
-		await addMember(admin, "grace@example.com", "viewer");
+		await addMember(admin, "grace@example.com", "responder");
 
 		const res = await app.request("/v1/members?limit=10", authed(admin));
 
@@ -94,7 +94,7 @@ describe("auth and members contract", () => {
 		const rows = list.items.map(({ email, role, status }) => ({ email, role, status }));
 		expect(rows.sort((a, b) => a.email.localeCompare(b.email))).toEqual([
 			{ email: "ada@example.com", role: "admin", status: "active" },
-			{ email: "grace@example.com", role: "viewer", status: "pending" },
+			{ email: "grace@example.com", role: "responder", status: "pending" },
 		]);
 	});
 
@@ -162,7 +162,7 @@ describe("auth and members contract", () => {
 
 	it.each([
 		["GET", undefined],
-		["POST", { email: "x@example.com", role: "viewer" }],
+		["POST", { email: "x@example.com", role: "responder" }],
 	])("requires a token for %s /v1/members", async (method, body) => {
 		const res = await app.request("/v1/members", {
 			method,

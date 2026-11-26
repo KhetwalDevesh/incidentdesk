@@ -121,8 +121,8 @@ export const createMemberService = (
 	const single = () => null;
 
 	return {
+		// Every member may list their tenant's members. Spec: docs/features/on-call-schedules.md.
 		async list(principal, page) {
-			if (!isAdmin(principal)) return fail("FORBIDDEN", "Only admins can list members");
 			return ok(await accounts.listUsers(principal.tenantId, page));
 		},
 

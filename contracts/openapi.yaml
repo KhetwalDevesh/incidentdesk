@@ -55,6 +55,20 @@ components:
             - string
             - "null"
           format: date-time
+        assignee:
+          type:
+            - object
+            - "null"
+          properties:
+            id:
+              type: string
+              format: uuid
+            email:
+              type: string
+          required:
+            - id
+            - email
+          additionalProperties: false
       required:
         - id
         - title
@@ -66,6 +80,7 @@ components:
         - origin
         - alertCount
         - lastAlertAt
+        - assignee
       additionalProperties: false
     Problem:
       type: object
@@ -151,6 +166,17 @@ components:
         - limit
         - offset
       additionalProperties: false
+    AssignIncidentRequest:
+      type: object
+      properties:
+        assigneeId:
+          type:
+            - string
+            - "null"
+          format: uuid
+      required:
+        - assigneeId
+      additionalProperties: false
     AuditEventList:
       type: object
       properties:
@@ -192,9 +218,16 @@ components:
             - incident.created
             - incident.acknowledged
             - incident.resolved
+            - incident.assigned
             - alert.grouped
             - alert_source.created
+            - alert_source.updated
             - notification_channel.created
+            - on_call_schedule.created
+            - on_call_schedule.updated
+            - on_call_schedule.deleted
+            - on_call_override.created
+            - on_call_override.deleted
         actor:
           type: object
           properties:
@@ -223,6 +256,7 @@ components:
                 - incident
                 - alert_source
                 - notification_channel
+                - on_call_schedule
             id:
               type: string
           required:
@@ -342,7 +376,6 @@ components:
         role:
           type: string
           enum:
-            - viewer
             - responder
             - admin
         status:
@@ -371,7 +404,6 @@ components:
         role:
           type: string
           enum:
-            - viewer
             - responder
             - admin
         status:
@@ -407,7 +439,6 @@ components:
         role:
           type: string
           enum:
-            - viewer
             - responder
             - admin
       required:
@@ -420,7 +451,6 @@ components:
         role:
           type: string
           enum:
-            - viewer
             - responder
             - admin
       required:
@@ -451,7 +481,6 @@ components:
               role:
                 type: string
                 enum:
-                  - viewer
                   - responder
                   - admin
             required:
@@ -591,6 +620,7 @@ components:
             - incident.opened
             - incident.acknowledged
             - incident.resolved
+            - incident.reassigned
         incidentId:
           type: string
           format: uuid
@@ -667,6 +697,11 @@ components:
           type: string
         secretHint:
           type: string
+        onCallScheduleId:
+          type:
+            - string
+            - "null"
+          format: uuid
         createdAt:
           type: string
           format: date-time
@@ -674,6 +709,7 @@ components:
         - id
         - name
         - secretHint
+        - onCallScheduleId
         - createdAt
       additionalProperties: false
       description: The signing secret is never returned. secretHint shows its last 4
@@ -697,8 +733,264 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+        onCallScheduleId:
+          type:
+            - string
+            - "null"
+          format: uuid
+          default: null
       required:
         - name
+      additionalProperties: false
+    UpdateAlertSourceRequest:
+      type: object
+      properties:
+        onCallScheduleId:
+          type:
+            - string
+            - "null"
+          format: uuid
+      required:
+        - onCallScheduleId
+      additionalProperties: false
+    OnCallSchedule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        timeZone:
+          type: string
+        handoffTime:
+          type: string
+        rotationDays:
+          type: integer
+        startsOn:
+          type: string
+        isDefault:
+          type: boolean
+        participants:
+          type: array
+          items:
+            type: object
+            properties:
+              userId:
+                type: string
+                format: uuid
+              email:
+                type: string
+            required:
+              - userId
+              - email
+            additionalProperties: false
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - timeZone
+        - handoffTime
+        - rotationDays
+        - startsOn
+        - isDefault
+        - participants
+        - createdAt
+      additionalProperties: false
+    CreateOnCallScheduleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        timeZone:
+          type: string
+          maxLength: 64
+        handoffTime:
+          type: string
+          pattern: ^([01]\d|2[0-3]):[0-5]\d$
+        rotationDays:
+          type: integer
+          minimum: 1
+          maximum: 28
+        startsOn:
+          type: string
+          format: date
+        participants:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 50
+          default: []
+        isDefault:
+          type: boolean
+          default: false
+      required:
+        - name
+        - timeZone
+        - handoffTime
+        - rotationDays
+        - startsOn
+      additionalProperties: false
+    OnCallScheduleList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnCallSchedule"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    UpdateOnCallScheduleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        timeZone:
+          type: string
+          maxLength: 64
+        handoffTime:
+          type: string
+          pattern: ^([01]\d|2[0-3]):[0-5]\d$
+        rotationDays:
+          type: integer
+          minimum: 1
+          maximum: 28
+        startsOn:
+          type: string
+          format: date
+        participants:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 50
+        isDefault:
+          type: boolean
+      additionalProperties: false
+      description: Any subset. A participants list replaces the whole rotation.
+    OnCall:
+      type: object
+      properties:
+        at:
+          type: string
+          format: date-time
+        onCall:
+          type:
+            - object
+            - "null"
+          properties:
+            userId:
+              type: string
+              format: uuid
+            email:
+              type: string
+            source:
+              type: string
+              enum:
+                - rotation
+                - override
+            from:
+              type: string
+              format: date-time
+            until:
+              type: string
+              format: date-time
+          required:
+            - userId
+            - email
+            - source
+            - from
+            - until
+          additionalProperties: false
+      required:
+        - at
+        - onCall
+      additionalProperties: false
+      description: Who is on call at a time. Null when nobody is.
+    OnCallOverride:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - email
+        - startsAt
+        - endsAt
+        - createdBy
+        - createdAt
+      additionalProperties: false
+    CreateOnCallOverrideRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+      required:
+        - userId
+        - startsAt
+        - endsAt
+      additionalProperties: false
+    OnCallOverrideList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OnCallOverride"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
       additionalProperties: false
     AlertList:
       type: object
@@ -995,7 +1287,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "403":
-          description: Role cannot acknowledge incidents
+          description: The incident is assigned to someone else, and the caller is not an
+            admin
           content:
             application/problem+json:
               schema:
@@ -1043,7 +1336,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "403":
-          description: Role cannot resolve incidents
+          description: The incident is assigned to someone else, and the caller is not an
+            admin
           content:
             application/problem+json:
               schema:
@@ -1062,6 +1356,62 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/assign:
+    post:
+      summary: Reassign an unresolved incident to a member, or unassign it
+      description: Any member may reassign to any member of the tenant, themself
+        included. Only an admin may unassign (null). Assigning the current
+        assignee changes nothing.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignIncidentRequest"
+      responses:
+        "200":
+          description: The incident with its new assignee
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only an admin can unassign an incident
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident or member in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Incident is resolved, or changed while reassigning
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or body failed validation
           content:
             application/problem+json:
               schema:
@@ -1156,9 +1506,16 @@ paths:
               - incident.created
               - incident.acknowledged
               - incident.resolved
+              - incident.assigned
               - alert.grouped
               - alert_source.created
+              - alert_source.updated
               - notification_channel.created
+              - on_call_schedule.created
+              - on_call_schedule.updated
+              - on_call_schedule.deleted
+              - on_call_override.created
+              - on_call_override.deleted
           required: false
           name: action
           in: query
@@ -1170,6 +1527,7 @@ paths:
               - incident
               - alert_source
               - notification_channel
+              - on_call_schedule
           required: false
           name: resourceType
           in: query
@@ -1302,6 +1660,7 @@ paths:
   /v1/members:
     get:
       summary: List members of the caller's tenant
+      description: Every member may list their tenant's members.
       security: *a1
       parameters:
         - schema:
@@ -1330,12 +1689,6 @@ paths:
                 $ref: "#/components/schemas/MemberList"
         "401":
           description: Missing or invalid token
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-        "403":
-          description: Only admins can list members
           content:
             application/problem+json:
               schema:
@@ -1800,6 +2153,467 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/alert-sources/{id}:
+    patch:
+      summary: Link an alert source to an on-call schedule, or unlink it
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAlertSourceRequest"
+      responses:
+        "200":
+          description: The alert source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertSource"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can change alert sources
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such alert source or schedule in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/on-call-schedules:
+    post:
+      summary: Create an on-call schedule
+      security: *a1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOnCallScheduleRequest"
+      responses:
+        "201":
+          description: Schedule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnCallSchedule"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can manage on-call schedules
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: A participant is not a member of the tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The tenant already has a schedule with this name
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      summary: List the caller's tenant's on-call schedules, by name
+      security: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of schedules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnCallScheduleList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/on-call-schedules/{id}:
+    get:
+      summary: Get one on-call schedule
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      responses:
+        "200":
+          description: The schedule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnCallSchedule"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such schedule in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    patch:
+      summary: Change an on-call schedule
+      description: Changes who is on call from now on. Incidents already assigned keep
+        their assignee.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOnCallScheduleRequest"
+      responses:
+        "200":
+          description: The schedule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnCallSchedule"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can manage on-call schedules
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such schedule in this tenant, or a participant is not a member
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The tenant already has a schedule with this name
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    delete:
+      summary: Delete an on-call schedule with its rotation and overrides
+      description: Linked alert sources are unlinked. Incidents keep their assignee.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      responses:
+        "204":
+          description: Schedule deleted
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Only admins can manage on-call schedules
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such schedule in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/on-call-schedules/{id}/on-call:
+    get:
+      summary: Who is on call at a time, now by default
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: at
+          in: query
+      responses:
+        "200":
+          description: Who is on call
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnCall"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such schedule in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/on-call-schedules/{id}/overrides:
+    post:
+      summary: Put a member on call for a time range
+      description: A responder may add an override only for themself. An admin may add
+        one for anyone.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOnCallOverrideRequest"
+      responses:
+        "201":
+          description: Override added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnCallOverride"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: A responder may only add an override for themself
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such schedule or member in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The override overlaps another override in this schedule
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or body failed validation, or the override has already ended
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      summary: List a schedule's overrides ending after `from`, by start time
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: from
+          in: query
+      responses:
+        "200":
+          description: A page of overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnCallOverrideList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such schedule in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/on-call-schedules/{id}/overrides/{overrideId}:
+    delete:
+      summary: Remove an override
+      description: A responder may remove only their own override. An admin may remove any.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: overrideId
+          in: path
+      responses:
+        "204":
+          description: Override removed
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: A responder may only remove their own override
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such override in this schedule
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
           content:
             application/problem+json:
               schema:

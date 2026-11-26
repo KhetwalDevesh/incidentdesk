@@ -100,9 +100,7 @@ describe("notification channels contract", () => {
 
 	it.each([
 		["no token", PATH, { method: "POST" }, 401, "UNAUTHENTICATED"],
-		["viewer creates", PATH, authed("acme-viewer", validBody), 403, "FORBIDDEN"],
 		["responder creates", PATH, authed("acme-responder", validBody), 403, "FORBIDDEN"],
-		["viewer lists", PATH, authed("acme-viewer"), 403, "FORBIDDEN"],
 		["responder lists", PATH, authed("acme-responder"), 403, "FORBIDDEN"],
 		["missing url", PATH, authed("acme-admin", { name: "x" }), 422, "VALIDATION_FAILED"],
 		[

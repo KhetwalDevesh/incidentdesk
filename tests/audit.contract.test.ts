@@ -8,7 +8,7 @@ import { MemberInviteSchema, MemberListSchema } from "../src/contract/members";
 import type { TenantId } from "../src/domain/shared/identity";
 import { addAlertSource, authed, buildTestSystem, post, signedAlert, signup } from "./helpers";
 
-// Spec: docs/features/audit-log.md. Fixed tokens: acme-responder is user-1, acme-viewer user-2,
+// Spec: docs/features/audit-log.md. Fixed tokens: acme-responder is user-1, acme-responder-2 user-2,
 // acme-admin user-4, all in tenant-acme.
 const alert = { dedupKey: "db-cpu-high", title: "DB CPU above 90%", severity: "sev2" };
 
@@ -30,7 +30,7 @@ describe("audit log contract", () => {
 		return AuditEventListSchema.parse(await res.json()).items;
 	};
 
-	const timeline = async (incidentId: string, token = "acme-viewer") => {
+	const timeline = async (incidentId: string, token = "acme-responder-2") => {
 		const res = await system.app.request(`/v1/incidents/${incidentId}/events`, authed(token));
 		expect(res.status).toBe(200);
 		return AuditEventListSchema.parse(await res.json()).items;
@@ -95,13 +95,14 @@ describe("audit log contract", () => {
 		});
 
 		it("records nothing for a refused change", async () => {
+			// Only admins add alert sources.
 			const res = await system.app.request(
-				"/v1/incidents",
-				authed("acme-viewer", { title: "Checkout is down", severity: "sev1" }),
+				"/v1/alert-sources",
+				authed("acme-responder-2", { name: "prometheus" }),
 			);
 
 			expect(res.status).toBe(403);
-			expect(await events("acme-viewer")).toEqual([]);
+			expect(await events("acme-responder-2")).toEqual([]);
 		});
 	});
 
@@ -122,7 +123,7 @@ describe("audit log contract", () => {
 
 			await system.processor.processMessages();
 
-			const [incident] = (await events("acme-viewer", "?action=incident.created")).map(
+			const [incident] = (await events("acme-responder-2", "?action=incident.created")).map(
 				(event) => event.resource.id,
 			);
 			const source = { type: "alert_source", id: sourceId };
@@ -210,7 +211,7 @@ describe("audit log contract", () => {
 			);
 			const { id: channelId } = (await res.json()) as { id: string };
 
-			expect((await events("acme-viewer")).reverse()).toEqual([
+			expect((await events("acme-responder-2")).reverse()).toEqual([
 				expect.objectContaining({
 					action: "alert_source.created",
 					actor: { type: "user", id: "user-4" },
@@ -231,7 +232,7 @@ describe("audit log contract", () => {
 			const first = await createIncident();
 			const second = await createIncident("req-create-0002");
 
-			for (const token of ["acme-viewer", "acme-responder", "acme-admin"]) {
+			for (const token of ["acme-responder-2", "acme-responder", "acme-admin"]) {
 				expect((await events(token)).map((event) => event.resource.id)).toEqual([
 					second.id,
 					first.id,
@@ -246,24 +247,25 @@ describe("audit log contract", () => {
 				method: "POST",
 			});
 			await createIncident("req-create-0002");
-			const all = await events("acme-viewer");
+			const all = await events("acme-responder-2");
 			const oldest = all.at(-1)?.occurredAt ?? "";
 
-			expect((await events("acme-viewer", "?action=incident.acknowledged")).length).toBe(1);
+			expect((await events("acme-responder-2", "?action=incident.acknowledged")).length).toBe(1);
 			expect(
-				(await events("acme-viewer", `?resourceType=incident&resourceId=${incident.id}`)).length,
+				(await events("acme-responder-2", `?resourceType=incident&resourceId=${incident.id}`))
+					.length,
 			).toBe(2);
-			expect((await events("acme-viewer", "?actorId=user-4")).map((e) => e.action)).toEqual([
+			expect((await events("acme-responder-2", "?actorId=user-4")).map((e) => e.action)).toEqual([
 				"incident.acknowledged",
 			]);
-			expect((await events("acme-viewer", `?from=${oldest}&to=${oldest}`)).length).toBeGreaterThan(
-				0,
-			);
-			expect(await events("acme-viewer", "?to=2000-01-01T00:00:00Z")).toEqual([]);
+			expect(
+				(await events("acme-responder-2", `?from=${oldest}&to=${oldest}`)).length,
+			).toBeGreaterThan(0);
+			expect(await events("acme-responder-2", "?to=2000-01-01T00:00:00Z")).toEqual([]);
 
 			const res = await system.app.request(
 				"/v1/audit-events?limit=2&offset=1",
-				authed("acme-viewer"),
+				authed("acme-responder-2"),
 			);
 			const page = AuditEventListSchema.parse(await res.json());
 			expect(page).toMatchObject({ total: 3, limit: 2, offset: 1 });
@@ -277,7 +279,7 @@ describe("audit log contract", () => {
 			["from after to", "?from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z"],
 			["a zero limit", "?limit=0"],
 		])("rejects %s with 422", async (_case, query) => {
-			const res = await system.app.request(`/v1/audit-events${query}`, authed("acme-viewer"));
+			const res = await system.app.request(`/v1/audit-events${query}`, authed("acme-responder-2"));
 
 			expect(res.status).toBe(422);
 			expect(ProblemSchema.parse(await res.json()).code).toBe("VALIDATION_FAILED");
@@ -294,9 +296,12 @@ describe("audit log contract", () => {
 		it("returns 404 for an unknown incident and 422 for a malformed id", async () => {
 			const unknown = await system.app.request(
 				"/v1/incidents/00000000-0000-4000-8000-000000000000/events",
-				authed("acme-viewer"),
+				authed("acme-responder-2"),
 			);
-			const malformed = await system.app.request("/v1/incidents/abc/events", authed("acme-viewer"));
+			const malformed = await system.app.request(
+				"/v1/incidents/abc/events",
+				authed("acme-responder-2"),
+			);
 
 			expect(unknown.status).toBe(404);
 			expect(ProblemSchema.parse(await unknown.json()).code).toBe("NOT_FOUND");
@@ -311,16 +316,16 @@ describe("audit log contract", () => {
 				MemberInviteSchema.parse(
 					await (await system.app.request("/v1/members", authed(owner, { email, role }))).json(),
 				);
-			const milton = await invite("milton@initech.example", "viewer");
+			const milton = await invite("milton@initech.example", "responder");
 			const peter = await invite("peter@initech.example", "responder");
 			const patch = (path: string, body: unknown) =>
 				system.app.request(path, { ...authed(owner, body), method: "PATCH" });
 
-			await patch(`/v1/members/${milton.id}`, { role: "responder" });
-			await patch(`/v1/members/${milton.id}`, { role: "responder" });
+			await patch(`/v1/members/${milton.id}`, { role: "admin" });
+			await patch(`/v1/members/${milton.id}`, { role: "admin" });
 			await patch("/v1/members", {
 				changes: [
-					{ id: milton.id, role: "admin" },
+					{ id: milton.id, role: "responder" },
 					{ id: peter.id, role: "responder" },
 				],
 			});
@@ -338,12 +343,12 @@ describe("audit log contract", () => {
 				{
 					action: "member.role_changed",
 					resource: { type: "user", id: milton.id },
-					details: { from: "viewer", to: "responder" },
+					details: { from: "responder", to: "admin" },
 				},
 				{
 					action: "member.role_changed",
 					resource: { type: "user", id: milton.id },
-					details: { from: "responder", to: "admin" },
+					details: { from: "admin", to: "responder" },
 				},
 				{
 					action: "member.removed",
@@ -352,6 +357,102 @@ describe("audit log contract", () => {
 				},
 			]);
 			expect(JSON.stringify(changes)).not.toContain("@initech.example");
+		});
+	});
+
+	// Spec: docs/features/on-call-schedules.md
+	describe("on-call", () => {
+		it("records schedule, override, link and assignment changes, by id and never by email", async () => {
+			const owner = await signup(system.app, "owner@initech.example", "Initech");
+			const send = (method: string, path: string, body?: unknown) =>
+				system.app.request(path, { ...authed(owner, body), method });
+			const invite = MemberInviteSchema.parse(
+				await (
+					await send("POST", "/v1/members", { email: "milton@initech.example", role: "responder" })
+				).json(),
+			);
+			const schedule = (await (
+				await send("POST", "/v1/on-call-schedules", {
+					name: "Payments",
+					timeZone: "UTC",
+					handoffTime: "00:00",
+					rotationDays: 7,
+					startsOn: "2020-01-06",
+					participants: [invite.id],
+					isDefault: true,
+				})
+			).json()) as { id: string };
+			await send("PATCH", `/v1/on-call-schedules/${schedule.id}`, {
+				rotationDays: 14,
+				name: "Pay",
+			});
+			const override = (await (
+				await send("POST", `/v1/on-call-schedules/${schedule.id}/overrides`, {
+					userId: invite.id,
+					startsAt: "2099-01-01T00:00:00Z",
+					endsAt: "2099-01-02T00:00:00Z",
+				})
+			).json()) as { id: string };
+			await send("DELETE", `/v1/on-call-schedules/${schedule.id}/overrides/${override.id}`);
+			const { sourceId } = await addAlertSource(system.app, owner);
+			await send("PATCH", `/v1/alert-sources/${sourceId}`, { onCallScheduleId: schedule.id });
+			const incident = IncidentSchema.parse(
+				await (
+					await send("POST", "/v1/incidents", { title: "Checkout is down", severity: "sev1" })
+				).json(),
+			);
+			await send("POST", `/v1/incidents/${incident.id}/assign`, { assigneeId: null });
+			await send("DELETE", `/v1/on-call-schedules/${schedule.id}`);
+
+			const all = (await events(owner, "?limit=100")).reverse();
+			const onCall = all.filter(
+				(event) =>
+					event.action.startsWith("on_call") ||
+					event.action === "alert_source.updated" ||
+					event.action === "incident.assigned",
+			);
+			const range = {
+				overrideId: override.id,
+				userId: invite.id,
+				startsAt: "2099-01-01T00:00:00.000Z",
+				endsAt: "2099-01-02T00:00:00.000Z",
+			};
+			const scheduleResource = { type: "on_call_schedule", id: schedule.id };
+			expect(onCall).toMatchObject([
+				{
+					action: "on_call_schedule.created",
+					resource: scheduleResource,
+					details: { name: "Payments" },
+				},
+				{
+					action: "on_call_schedule.updated",
+					resource: scheduleResource,
+					details: { name: "Pay", changed: "name,rotationDays" },
+				},
+				{ action: "on_call_override.created", resource: scheduleResource, details: range },
+				{ action: "on_call_override.deleted", resource: scheduleResource, details: range },
+				{
+					action: "alert_source.updated",
+					resource: { type: "alert_source", id: sourceId },
+					details: { onCallScheduleId: schedule.id },
+				},
+				{
+					action: "incident.assigned",
+					resource: { type: "incident", id: incident.id },
+					details: { from: "none", to: invite.id, manual: "false" },
+				},
+				{
+					action: "incident.assigned",
+					resource: { type: "incident", id: incident.id },
+					details: { from: invite.id, to: "none", manual: "true" },
+				},
+				{
+					action: "on_call_schedule.deleted",
+					resource: scheduleResource,
+					details: { name: "Pay" },
+				},
+			]);
+			expect(JSON.stringify(onCall)).not.toContain("@initech.example");
 		});
 	});
 });

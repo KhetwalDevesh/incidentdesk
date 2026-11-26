@@ -1,6 +1,6 @@
 # On-call schedules and assignment
 
-Status: Approved
+Status: Done
 
 Phase 4, core flow step 4: "The on-call engineer gets a Slack alert." Slack delivery (`docs/features/slack-delivery.md`) posts to a channel. This feature decides who is on call, makes that person the incident's assignee when it opens, and removes the viewer role.
 
@@ -39,7 +39,7 @@ Answer "who is on call right now?" for each team, and make that person responsib
 
 1. An override covering that time wins.
 2. Otherwise the rotation decides. Shift k starts at the handover time, in the schedule's time zone, on the start date plus k × rotation length days. The member at position k modulo the number of members is on call.
-3. With no members and no override, nobody is on call.
+3. With no members and no override, nobody is on call. Before the rotation's first handover, only an override can put someone on call.
 
 Handover follows the local clock, so a shift that crosses a daylight saving change is an hour shorter or longer. A handover time that does not exist that day (it falls in the skipped hour) happens at the first valid time after it.
 
@@ -207,7 +207,7 @@ Reassigned to alan@acme.example by grace@acme.example · incident 7c9e…
 - **A responder assigns an incident to themself, then acknowledges it:** allowed, by the user's decision. The audit log shows both steps.
 - **A deleted schedule:** its participants and overrides go with it, linked alert sources are unlinked, and if it was the default the tenant has no default. Existing assignees stay.
 - **The default schedule is unset or deleted:** later person-opened incidents are unassigned.
-- **An empty rotation, or a gap with no override:** the incident is unassigned.
+- **An empty rotation, a time before the rotation starts, or a gap with no override:** the incident is unassigned.
 - **Two concurrent overlapping overrides:** one is created, the other gets 409.
 - **An unknown or other-tenant member, schedule or source id in a request:** 404, naming the item (`participants.2`), as for bulk member changes.
 - **A time zone Node does not know, an impossible date, or `handoffTime` `24:00`:** 422.
@@ -244,16 +244,16 @@ Reassigned to alan@acme.example by grace@acme.example · incident 7c9e…
 
 ## Done when
 
-- [ ] `whoIsOnCall` follows the rotation, wraps round, prefers an override, hands over at the local time across a daylight saving change, and handles an empty rotation (`src/domain/onCall/whoIsOnCall.test.ts`)
-- [ ] Schedules, defaults, overrides and source links are stored the same in memory and in Postgres. Overlapping overrides are refused, including when two are added at once. Removing a member removes them from rotations, deletes their overrides and unassigns their incidents (`tests/onCallRepository.parity.test.ts`, `tests/accountRepository.parity.test.ts`)
-- [ ] An incident opened by a linked alert source is assigned from its schedule, one opened by a person from the default schedule, and with neither it is unassigned. A handover never changes an assignee (`tests/onCall.contract.test.ts`, `src/services/alerts/alertProcessor.test.ts`)
-- [ ] Only the assignee or an admin can acknowledge or resolve an assigned incident; anyone can act on an unassigned one (`tests/incidents.contract.test.ts`, `tests/security.test.ts`)
-- [ ] Any member reassigns an unresolved incident to a tenant member; a responder's unassign gets 403, a resolved incident 409, another tenant's member or incident 404, and a no-op change records nothing (`tests/incidents.contract.test.ts`, `tests/security.test.ts`)
-- [ ] Each reassignment posts one "reassigned" Slack message naming both people, two reassignments post twice, and the emails leave the row once delivered (`tests/slackDelivery.contract.test.ts`, `tests/notificationDeliveryRepository.parity.test.ts`)
-- [ ] Every new route returns its documented shapes and errors. Admins manage everything; a responder adds and removes only their own overrides (`tests/onCall.contract.test.ts`)
-- [ ] The viewer role is gone: existing viewers are responders, `viewer` in a request gets 422, and every member lists their own tenant's members (`tests/members.contract.test.ts`, `tests/migrate.test.ts`)
-- [ ] Another tenant's schedules, overrides, sources and members cannot be read, used or assigned (`tests/security.test.ts`, "on-call")
-- [ ] The "opened" Slack message names the assignee, or says "Unassigned", and the email leaves the row once delivered (`deliveryProcessor.test.ts`, `tests/slackDelivery.contract.test.ts`)
-- [ ] Every schedule, override, link and assignment change is audited, with no email in its details (`tests/audit.contract.test.ts`)
-- [ ] Contract regenerated: additive (including the new delivery event), apart from the three decided breaking changes
-- [ ] `pnpm check` passes
+- [x] `whoIsOnCall` follows the rotation, wraps round, prefers an override, hands over at the local time across a daylight saving change, and handles an empty rotation (`src/domain/onCall/whoIsOnCall.test.ts`)
+- [x] Schedules, defaults, overrides and source links are stored the same in memory and in Postgres. Overlapping overrides are refused, including when two are added at once. Removing a member removes them from rotations, deletes their overrides and unassigns their incidents (`tests/onCallRepository.parity.test.ts`)
+- [x] An incident opened by a linked alert source is assigned from its schedule, one opened by a person from the default schedule, and with neither it is unassigned. A handover never changes an assignee (`tests/onCall.contract.test.ts`, `src/services/alerts/alertProcessor.test.ts`)
+- [x] Only the assignee or an admin can acknowledge or resolve an assigned incident; anyone can act on an unassigned one. A reassignment between an acknowledge's read and write makes it lose (`tests/onCall.contract.test.ts`, `tests/security.test.ts`, `src/services/incidents/incidentService.test.ts`)
+- [x] Any member reassigns an unresolved incident to a tenant member; a responder's unassign gets 403, a resolved incident 409, another tenant's member or incident 404, and a no-op change records nothing (`tests/incidents.contract.test.ts`, `tests/onCall.contract.test.ts`, `tests/security.test.ts`)
+- [x] Each reassignment posts one "reassigned" Slack message naming both people, two reassignments post twice, and the emails leave the row once delivered (`tests/slackDelivery.contract.test.ts`, `tests/notificationDeliveryRepository.parity.test.ts`, `tests/onCallRepository.parity.test.ts`)
+- [x] Every new route returns its documented shapes and errors. Admins manage everything; a responder adds and removes only their own overrides (`tests/onCall.contract.test.ts`)
+- [x] The viewer role is gone: existing viewers are responders, `viewer` in a request gets 422, and every member lists their own tenant's members (`tests/members.contract.test.ts`, `tests/migrate.test.ts`, `tests/security.test.ts`)
+- [x] Another tenant's schedules, overrides, sources and members cannot be read, used or assigned (`tests/security.test.ts`, "on-call")
+- [x] The "opened" Slack message names the assignee, or says "Unassigned", and the email leaves the row once delivered (`deliveryProcessor.test.ts`, `tests/slackDelivery.contract.test.ts`)
+- [x] Every schedule, override, link and assignment change is audited, with no email in its details (`tests/audit.contract.test.ts`)
+- [x] Contract regenerated: additive (including the new delivery event), apart from the three decided breaking changes
+- [x] `pnpm check` passes

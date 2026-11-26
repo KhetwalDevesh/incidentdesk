@@ -3,7 +3,13 @@ import { describe, expect, it } from "vitest";
 import { anAudit, groupingAudit } from "../../../tests/auditEntries";
 import { InMemoryQueue } from "../../adapters/inMemoryQueue";
 import type { IncidentId } from "../../contract/incidents";
-import type { Alert, AlertRef, AlertRepository } from "../../domain/alerts/types";
+import type {
+	Alert,
+	AlertRef,
+	AlertRepository,
+	AlertSourceLookup,
+} from "../../domain/alerts/types";
+import type { OnCallAssigner } from "../../domain/onCall/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { InMemoryAlertRepository } from "../../repository/alerts/inMemoryAlertRepository";
 import { InMemoryIncidentRepository } from "../../repository/incidents/inMemoryIncidentRepository";
@@ -113,6 +119,8 @@ describe("alertProcessor grouping", () => {
 			dedupKey: "db-cpu-high",
 			alertCount: 1,
 			lastAlertAt: alert.receivedAt,
+			assigneeId: null,
+			assignmentCount: 0,
 		});
 		expect(await allAlerts()).toMatchObject([
 			{ id: alert.id, state: "processed", incidentId: incident?.id, attempts: 1 },
@@ -146,6 +154,8 @@ describe("alertProcessor grouping", () => {
 			severity: "sev2",
 			alertCount: 2,
 			lastAlertAt: repeat.receivedAt,
+			assigneeId: null,
+			assignmentCount: 0,
 		});
 	});
 
@@ -157,7 +167,7 @@ describe("alertProcessor grouping", () => {
 		await incidents.update(
 			tenant,
 			opened?.id as IncidentId,
-			"open",
+			{ status: "open", assigneeId: null },
 			{ status: "acknowledged" },
 			anAudit(tenant, "incident.acknowledged"),
 		);
@@ -176,7 +186,7 @@ describe("alertProcessor grouping", () => {
 		await incidents.update(
 			tenant,
 			first?.id as IncidentId,
-			"open",
+			{ status: "open", assigneeId: null },
 			{ status: "resolved" },
 			anAudit(tenant, "incident.acknowledged"),
 		);
@@ -429,5 +439,95 @@ describe("alertProcessor concurrency", () => {
 		expect(second).toBeNull();
 		expect(await alerts.startAttempt(tenant, alert.id, start)).toBeNull();
 		expect(await allIncidents()).toEqual([]);
+	});
+});
+
+// Spec: docs/features/on-call-schedules.md, "Which schedule assigns an incident".
+describe("alertProcessor assignment", () => {
+	const source = (tenantId: TenantId, onCallScheduleId: string | null) => ({
+		id: SOURCE,
+		tenantId,
+		name: "prometheus",
+		secretCiphertext: new Uint8Array(),
+		secretHint: "WXYZ",
+		onCallScheduleId,
+		createdAt: start,
+	});
+
+	const assigning = (lookup: AlertSourceLookup) => {
+		const context = setup();
+		const asked: (string | null)[] = [];
+		const onCall: OnCallAssigner = {
+			assigneeFor: async (_tenantId, scheduleId) => {
+				asked.push(scheduleId);
+				return { userId: "user-7", email: "grace@acme.example" };
+			},
+		};
+		const processor = createAlertProcessor({
+			queue: context.queue,
+			alerts: context.alerts,
+			outbox: context.alerts,
+			now: () => start,
+			sources: lookup,
+			onCall,
+		});
+		return { ...context, processor, asked };
+	};
+
+	it("assigns the incident from the source's linked schedule, and audits it", async () => {
+		const { processor, send, allIncidents, asked, incidents } = assigning({
+			findForIngest: async () => source(tenant, "schedule-1"),
+		});
+		await send();
+
+		await processor.processMessages();
+
+		const [incident] = await allIncidents();
+		expect(asked).toEqual(["schedule-1"]);
+		expect(incident).toMatchObject({ assigneeId: "user-7", assignmentCount: 0 });
+		const actions = (
+			await incidents.audit.listForResource(
+				tenant,
+				{ type: "incident", id: incident?.id ?? "" },
+				{ limit: 10, offset: 0 },
+			)
+		).items.map((entry) => [entry.action, entry.details]);
+		expect(actions).toContainEqual([
+			"incident.assigned",
+			{ from: "none", to: "user-7", manual: "false" },
+		]);
+	});
+
+	it("asks for the default schedule when the source is unlinked or not the tenant's", async () => {
+		const unlinked = assigning({ findForIngest: async () => source(tenant, null) });
+		const foreign = assigning({
+			findForIngest: async () => source("tenant-b" as TenantId, "schedule-b"),
+		});
+		await unlinked.send();
+		await foreign.send();
+
+		await unlinked.processor.processMessages();
+		await foreign.processor.processMessages();
+
+		expect(unlinked.asked).toEqual([null]);
+		expect(foreign.asked).toEqual([null]);
+	});
+
+	it("does not change the assignee when an alert joins an open incident", async () => {
+		const { processor, send, allIncidents, asked } = assigning({
+			findForIngest: async () => source(tenant, null),
+		});
+		await send();
+		await processor.processMessages();
+		const [opened] = await allIncidents();
+
+		await send();
+		await send({ status: "resolved" });
+		await processor.processMessages();
+
+		const [after] = await allIncidents();
+		expect(after).toMatchObject({ id: opened?.id, assigneeId: "user-7", alertCount: 3 });
+		// A resolved alert cannot open an incident, so it never asks who is on call.
+		expect(asked).toHaveLength(2);
 	});
 });

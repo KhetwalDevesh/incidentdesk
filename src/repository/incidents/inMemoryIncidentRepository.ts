@@ -1,9 +1,16 @@
 import type { PageQuery } from "../../contract/common";
 import type { IncidentId } from "../../contract/incidents";
 import type { AuditEntry } from "../../domain/audit/types";
-import type { Incident, IncidentChanges, IncidentRepository } from "../../domain/incidents/types";
+import type {
+	Incident,
+	IncidentChanges,
+	IncidentExpectation,
+	IncidentRepository,
+	ReassignOutcome,
+} from "../../domain/incidents/types";
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
+import type { InMemoryAccountRepository } from "../accounts/inMemoryAccountRepository";
 import { InMemoryAuditStore } from "../audit/inMemoryAuditStore";
 import { InMemoryNotificationDeliveryRepository } from "../notifications/inMemoryNotificationDeliveryRepository";
 
@@ -14,18 +21,33 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 	constructor(
 		readonly audit: InMemoryAuditStore = new InMemoryAuditStore(),
 		readonly deliveries: InMemoryNotificationDeliveryRepository = new InMemoryNotificationDeliveryRepository(),
-	) {}
+		// Without it, the tenant has no members, as for a non-uuid tenant in Postgres.
+		private readonly members: InMemoryAccountRepository | null = null,
+	) {
+		// The twin of the member removal unassigning their incidents in its transaction.
+		members?.removalHooks.push((tenantId, userIds) => {
+			for (const incident of this.incidents.values()) {
+				if (
+					incident.tenantId === tenantId &&
+					incident.assigneeId !== null &&
+					userIds.has(incident.assigneeId)
+				) {
+					this.incidents.set(incident.id, { ...incident, assigneeId: null });
+				}
+			}
+		});
+	}
 
 	async create(
 		tenantId: TenantId,
 		incident: Omit<Incident, "tenantId">,
-		audit: AuditEntry,
+		audit: AuditEntry[],
 		notice?: DeliveryNotice,
 	): Promise<Incident> {
-		this.audit.checkSync([audit]);
+		this.audit.checkSync(audit);
 		const stored = { ...incident, tenantId };
 		this.incidents.set(stored.id, stored);
-		this.audit.appendSync([audit]);
+		this.audit.appendSync(audit);
 		if (notice) this.deliveries.insertSync(tenantId, notice);
 		return stored;
 	}
@@ -70,18 +92,54 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 	async update(
 		tenantId: TenantId,
 		id: IncidentId,
-		expectedStatus: Incident["status"],
+		expected: IncidentExpectation,
 		changes: IncidentChanges,
 		audit: AuditEntry,
 		notice?: DeliveryNotice,
 	): Promise<Incident | null> {
 		const current = this.incidents.get(id);
-		if (current?.tenantId !== tenantId || current.status !== expectedStatus) return null;
+		if (
+			current?.tenantId !== tenantId ||
+			current.status !== expected.status ||
+			current.assigneeId !== expected.assigneeId
+		) {
+			return null;
+		}
 		this.audit.checkSync([audit]);
 		const updated = { ...current, ...changes };
 		this.incidents.set(id, updated);
 		this.audit.appendSync([audit]);
 		if (notice) this.deliveries.insertSync(tenantId, notice);
 		return updated;
+	}
+
+	async reassign(
+		tenantId: TenantId,
+		id: IncidentId,
+		{ from, to }: { from: string | null; to: string | null },
+		audit: AuditEntry,
+		notice: DeliveryNotice,
+	): Promise<ReassignOutcome> {
+		if (to !== null && !this.members?.hasMemberSync(tenantId, to)) {
+			return { status: "member_not_found" };
+		}
+		const current = this.incidents.get(id);
+		if (
+			current?.tenantId !== tenantId ||
+			current.status === "resolved" ||
+			current.assigneeId !== from
+		) {
+			return { status: "changed" };
+		}
+		this.audit.checkSync([audit]);
+		const incident = {
+			...current,
+			assigneeId: to,
+			assignmentCount: current.assignmentCount + 1,
+		};
+		this.incidents.set(id, incident);
+		this.audit.appendSync([audit]);
+		this.deliveries.insertSync(tenantId, { ...notice, occurrence: incident.assignmentCount });
+		return { status: "reassigned", incident };
 	}
 }

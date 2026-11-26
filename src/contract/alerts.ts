@@ -18,10 +18,21 @@ export const AlertSourceIdSchema = z.uuid();
 export const CreateAlertSourceRequestSchema = z
 	.strictObject({
 		name: z.string().trim().min(1).max(100),
+		// The schedule that assigns its incidents. See docs/features/on-call-schedules.md.
+		onCallScheduleId: z.uuid().nullable().default(null),
 	})
 	.openapi("CreateAlertSourceRequest");
 
 export type CreateAlertSourceRequest = z.infer<typeof CreateAlertSourceRequestSchema>;
+
+export const UpdateAlertSourceRequestSchema = z
+	.strictObject({
+		// Null unlinks it: its incidents are then assigned from the default schedule.
+		onCallScheduleId: z.uuid().nullable(),
+	})
+	.openapi("UpdateAlertSourceRequest");
+
+export type UpdateAlertSourceRequest = z.infer<typeof UpdateAlertSourceRequestSchema>;
 
 // Strict so the secret or its ciphertext cannot leak by accident.
 export const AlertSourceSchema = z
@@ -29,6 +40,7 @@ export const AlertSourceSchema = z
 		id: z.uuid(),
 		name: z.string(),
 		secretHint: z.string(),
+		onCallScheduleId: z.uuid().nullable(),
 		createdAt: z.iso.datetime(),
 	})
 	.openapi("AlertSource", {

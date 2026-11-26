@@ -87,6 +87,10 @@ export type DeliveryPayload = {
 	alertCount: number;
 	openedAt: string;
 	occurredAt: string;
+	// Who owns the incident after the change: null for nobody. The email is removed once the
+	// delivery is no longer pending, like the actor's. Absent on deliveries recorded before
+	// on-call assignment (docs/features/on-call-schedules.md), which name no assignee.
+	assignee?: { email: string | null } | null;
 };
 
 export type NotificationDelivery = {
@@ -95,6 +99,8 @@ export type NotificationDelivery = {
 	channelId: string;
 	incidentId: IncidentId;
 	event: NotificationEvent;
+	// Numbers repeats of one event, such as each reassignment. 0 otherwise.
+	occurrence: number;
 	payload: DeliveryPayload;
 	state: DeliveryState;
 	// Counted attempts. A rate-limited attempt is not counted.
@@ -116,6 +122,8 @@ export type NotificationDeliveryPage = { items: NotificationDelivery[]; total: n
 export type DeliveryNotice = {
 	incidentId: IncidentId;
 	event: NotificationEvent;
+	// See NotificationDelivery.occurrence. Defaults to 0.
+	occurrence?: number;
 	severity: IncidentSeverity;
 	payload: DeliveryPayload;
 	createdAt: Date;

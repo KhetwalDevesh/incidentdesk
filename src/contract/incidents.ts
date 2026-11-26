@@ -19,6 +19,15 @@ export const CreateIncidentRequestSchema = z
 
 export type CreateIncidentRequest = z.infer<typeof CreateIncidentRequestSchema>;
 
+export const AssignIncidentRequestSchema = z
+	.strictObject({
+		// A member of the caller's tenant, or null to unassign (admins only).
+		assigneeId: z.uuid().nullable(),
+	})
+	.openapi("AssignIncidentRequest");
+
+export type AssignIncidentRequest = z.infer<typeof AssignIncidentRequestSchema>;
+
 // Strict so a leaked internal field, such as tenantId, fails the contract test.
 export const IncidentSchema = z
 	.strictObject({
@@ -33,6 +42,8 @@ export const IncidentSchema = z
 		origin: z.enum(INCIDENT_ORIGINS),
 		alertCount: z.number().int(),
 		lastAlertAt: z.iso.datetime().nullable(),
+		// Who owns it. See docs/features/on-call-schedules.md.
+		assignee: z.strictObject({ id: z.uuid(), email: z.string() }).nullable(),
 	})
 	.openapi("Incident");
 

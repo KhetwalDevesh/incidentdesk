@@ -12,9 +12,9 @@ What problem this solves, and for whom.
 
 ## Permissions
 
-| Action | Viewer | Responder | Admin |
-|---|---|---|---|
-| | | | |
+| Action | Responder | Admin |
+|---|---|---|
+| | | |
 
 ## API changes
 

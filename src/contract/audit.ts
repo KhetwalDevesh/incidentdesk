@@ -14,9 +14,16 @@ export const AUDIT_ACTIONS = [
 	"incident.created",
 	"incident.acknowledged",
 	"incident.resolved",
+	"incident.assigned",
 	"alert.grouped",
 	"alert_source.created",
+	"alert_source.updated",
 	"notification_channel.created",
+	"on_call_schedule.created",
+	"on_call_schedule.updated",
+	"on_call_schedule.deleted",
+	"on_call_override.created",
+	"on_call_override.deleted",
 ] as const;
 
 export const AUDIT_RESOURCE_TYPES = [
@@ -25,6 +32,7 @@ export const AUDIT_RESOURCE_TYPES = [
 	"incident",
 	"alert_source",
 	"notification_channel",
+	"on_call_schedule",
 ] as const;
 
 export const AUDIT_ACTOR_TYPES = ["user", "alert_source", "anonymous"] as const;

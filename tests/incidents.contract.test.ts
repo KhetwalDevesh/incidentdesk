@@ -32,7 +32,6 @@ describe("incidents contract", () => {
 
 	it.each([
 		["no token", "/v1/incidents", {}, 401, "UNAUTHENTICATED"],
-		["viewer writes", "/v1/incidents", authed("acme-viewer", validBody), 403, "FORBIDDEN"],
 		["bad body", "/v1/incidents", authed("acme-responder", {}), 422, "VALIDATION_FAILED"],
 		["bad id", "/v1/incidents/nope", authed("acme-responder"), 422, "VALIDATION_FAILED"],
 		["unknown route", "/nope", {}, 404, "NOT_FOUND"],
@@ -74,20 +73,21 @@ describe("incidents contract", () => {
 		it("persists the acknowledgement", async () => {
 			await app.request(ackPath(), authed("acme-responder", {}));
 
-			const res = await app.request(`/v1/incidents/${incidentId}`, authed("acme-viewer"));
+			const res = await app.request(`/v1/incidents/${incidentId}`, authed("acme-responder-2"));
 
 			expect(IncidentSchema.parse(await res.json()).status).toBe("acknowledged");
 		});
 
-		it.each([
-			["no token", {}, 401, "UNAUTHENTICATED"],
-			["viewer acknowledges", authed("acme-viewer", {}), 403, "FORBIDDEN"],
-		])("returns a problem body for %s", async (_name, init, status, code) => {
-			const res = await app.request(ackPath(), init);
+		// Acting on an assigned incident: tests/onCall.contract.test.ts.
+		it.each([["no token", {}, 401, "UNAUTHENTICATED"]])(
+			"returns a problem body for %s",
+			async (_name, init, status, code) => {
+				const res = await app.request(ackPath(), init);
 
-			expect(res.status).toBe(status);
-			expect(ProblemSchema.parse(await res.json()).code).toBe(code);
-		});
+				expect(res.status).toBe(status);
+				expect(ProblemSchema.parse(await res.json()).code).toBe(code);
+			},
+		);
 
 		it("returns 409 on a repeat acknowledge", async () => {
 			await app.request(ackPath(), authed("acme-responder", {}));
@@ -163,20 +163,20 @@ describe("incidents contract", () => {
 		it("persists the resolution", async () => {
 			await app.request(resolvePath(), authed("acme-responder", {}));
 
-			const res = await app.request(`/v1/incidents/${incidentId}`, authed("acme-viewer"));
+			const res = await app.request(`/v1/incidents/${incidentId}`, authed("acme-responder-2"));
 
 			expect(IncidentSchema.parse(await res.json()).status).toBe("resolved");
 		});
 
-		it.each([
-			["no token", {}, 401, "UNAUTHENTICATED"],
-			["viewer resolves", authed("acme-viewer", {}), 403, "FORBIDDEN"],
-		])("returns a problem body for %s", async (_name, init, status, code) => {
-			const res = await app.request(resolvePath(), init);
+		it.each([["no token", {}, 401, "UNAUTHENTICATED"]])(
+			"returns a problem body for %s",
+			async (_name, init, status, code) => {
+				const res = await app.request(resolvePath(), init);
 
-			expect(res.status).toBe(status);
-			expect(ProblemSchema.parse(await res.json()).code).toBe(code);
-		});
+				expect(res.status).toBe(status);
+				expect(ProblemSchema.parse(await res.json()).code).toBe(code);
+			},
+		);
 
 		it("returns 409 on a repeat resolve", async () => {
 			await app.request(resolvePath(), authed("acme-responder", {}));
@@ -222,6 +222,92 @@ describe("incidents contract", () => {
 
 			expect(res.status).toBe(status);
 			expect(ProblemSchema.parse(await res.json()).code).toBe(code);
+		});
+	});
+
+	// Reassigning to real members: tests/onCall.contract.test.ts. The fixed-token tenant has no
+	// members, which these cases rely on.
+	describe("assign", () => {
+		let incidentId: string;
+		const assignPath = () => `/v1/incidents/${incidentId}/assign`;
+
+		beforeEach(async () => {
+			const res = await app.request("/v1/incidents", authed("acme-responder", validBody));
+			incidentId = IncidentSchema.parse(await res.json()).id;
+		});
+
+		it("opens unassigned when the tenant has no schedule", async () => {
+			const res = await app.request(`/v1/incidents/${incidentId}`, authed("acme-responder"));
+
+			expect(IncidentSchema.parse(await res.json()).assignee).toBeNull();
+		});
+
+		it("returns the incident unchanged when it already has that assignee", async () => {
+			const res = await app.request(assignPath(), authed("acme-admin", { assigneeId: null }));
+
+			expect(res.status).toBe(200);
+			expect(IncidentSchema.parse(await res.json())).toMatchObject({
+				id: incidentId,
+				assignee: null,
+			});
+		});
+
+		it.each([
+			["no token", () => ({}), 401, "UNAUTHENTICATED"],
+			[
+				"a responder unassigning",
+				() => authed("acme-responder", { assigneeId: null }),
+				403,
+				"FORBIDDEN",
+			],
+			[
+				"an unknown member",
+				() => authed("acme-responder", { assigneeId: "00000000-0000-4000-8000-000000000001" }),
+				404,
+				"NOT_FOUND",
+			],
+			["a missing assigneeId", () => authed("acme-responder", {}), 422, "VALIDATION_FAILED"],
+			[
+				"a malformed assigneeId",
+				() => authed("acme-responder", { assigneeId: "grace" }),
+				422,
+				"VALIDATION_FAILED",
+			],
+		])("returns a problem body for %s", async (_name, init, status, code) => {
+			const res = await app.request(assignPath(), init());
+
+			expect(res.status).toBe(status);
+			expect(ProblemSchema.parse(await res.json()).code).toBe(code);
+		});
+
+		it("names the field when the member is unknown", async () => {
+			const res = await app.request(
+				assignPath(),
+				authed("acme-responder", { assigneeId: "00000000-0000-4000-8000-000000000001" }),
+			);
+
+			expect(ProblemSchema.parse(await res.json()).errors).toEqual([
+				{ path: "assigneeId", message: "Member not found" },
+			]);
+		});
+
+		it("returns 409 for a resolved incident, and 404 for an unknown or another tenant's", async () => {
+			await app.request(`/v1/incidents/${incidentId}/resolve`, authed("acme-responder", {}));
+			const body = { assigneeId: "00000000-0000-4000-8000-000000000001" };
+
+			const resolved = await app.request(assignPath(), authed("acme-admin", body));
+			const unknown = await app.request(
+				"/v1/incidents/00000000-0000-4000-8000-000000000000/assign",
+				authed("acme-admin", body),
+			);
+			const foreign = await app.request(assignPath(), authed("globex-responder", body));
+
+			expect(resolved.status).toBe(409);
+			expect(ProblemSchema.parse(await resolved.json()).detail).toBe(
+				"A resolved incident cannot be reassigned",
+			);
+			expect(unknown.status).toBe(404);
+			expect(foreign.status).toBe(404);
 		});
 	});
 
