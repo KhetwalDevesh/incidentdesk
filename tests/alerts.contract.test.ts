@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { AlertListSchema } from "../src/contract/alerts";
 import { ProblemSchema } from "../src/contract/common";
+import type { TenantId } from "../src/domain/shared/identity";
 import { addAlertSource, authed, buildTestSystem, signedAlert } from "./helpers";
 
 const PATH = "/v1/alerts";
 const NOW = new Date("2026-06-01T12:00:00.000Z");
 const alert = { dedupKey: "db-cpu-high", title: "DB CPU above 90%", severity: "sev2" };
+// The tenant behind the fixed "acme-admin" token.
+const ACME = "tenant-acme" as TenantId;
 
 describe("alerts contract", () => {
 	let system: ReturnType<typeof buildTestSystem>;
@@ -23,7 +26,7 @@ describe("alerts contract", () => {
 
 	it("lists alerts in the documented shape, with their incident once processed", async () => {
 		await send({ ...alert, details: { host: "db-1" } });
-		await system.processor.processBatch();
+		await system.processor.processMessages();
 
 		const res = await system.app.request(PATH, authed("acme-admin"));
 
@@ -43,8 +46,8 @@ describe("alerts contract", () => {
 	it("filters by state, so an admin can find failed alerts", async () => {
 		await send(alert);
 		await send({ ...alert, dedupKey: "disk-full" });
-		const [first] = await system.alerts.claimDue(NOW, 1, NOW);
-		await system.alerts.fail(first?.tenantId ?? never(), first?.id ?? never(), "boom", null, NOW);
+		const [first] = (await system.alerts.list(ACME, { limit: 1, offset: 0 })).items;
+		await system.alerts.fail(ACME, first?.id ?? never(), "boom", null, NOW);
 
 		const failed = await system.app.request(`${PATH}?state=failed`, authed("acme-admin"));
 		const pending = await system.app.request(`${PATH}?state=pending`, authed("acme-admin"));
@@ -57,15 +60,9 @@ describe("alerts contract", () => {
 
 	it("never returns the internal error text", async () => {
 		await send(alert);
-		const [claimed] = await system.alerts.claimDue(NOW, 1, NOW);
+		const [stored] = (await system.alerts.list(ACME, { limit: 1, offset: 0 })).items;
 		const internal = "connection to 10.0.0.5:5432 refused";
-		await system.alerts.fail(
-			claimed?.tenantId ?? never(),
-			claimed?.id ?? never(),
-			internal,
-			null,
-			NOW,
-		);
+		await system.alerts.fail(ACME, stored?.id ?? never(), internal, null, NOW);
 
 		const res = await system.app.request(PATH, authed("acme-admin"));
 

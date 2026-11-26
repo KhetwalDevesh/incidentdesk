@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createAesGcmSecretBox } from "../src/adapters/aesGcmSecretBox";
+import { InMemoryAlertQueue } from "../src/adapters/inMemoryAlertQueue";
 import type { IncidentId } from "../src/contract/incidents";
 import {
 	type Alert,
-	type AlertQueue,
+	type AlertOutbox,
 	type AlertRepository,
 	type AlertSource,
 	type AlertSourceLookup,
@@ -46,7 +47,7 @@ beforeAll(async () => {
 	}
 });
 
-// claimDue serves every tenant, so alerts left by an earlier test would be claimed by a later one.
+// claimOverdue serves every tenant, so alerts left by an earlier test would be claimed by a later one.
 // This schema belongs to this file alone, so emptying it is safe.
 beforeEach(async () => {
 	await pool.query("TRUNCATE alerts");
@@ -80,7 +81,7 @@ const newSource = (
 
 type Stores = {
 	sources: AlertSourceRepository & AlertSourceLookup;
-	alerts: AlertRepository & AlertQueue;
+	alerts: AlertRepository & AlertOutbox;
 	incidents: IncidentRepository;
 };
 
@@ -136,10 +137,15 @@ describe.each([
 		incidentId: null,
 		receivedAt: at(),
 		processedAt: null,
+		sentAt: null,
 		...overrides,
 	});
 
-	const claimAll = () => stores.alerts.claimDue(at(1), 100, at(60_000));
+	// Unsent alerts due by at(0) and sent ones due by at(-10_000) are overdue.
+	const claimOverdue = () =>
+		stores.alerts.claimOverdue({ unsentBefore: at(), sentBefore: at(-10_000) }, at(60_000), 100);
+	const stored = async (tenantId = acme) =>
+		(await stores.alerts.list(tenantId, { limit: 10, offset: 0 })).items;
 
 	const candidate = (alert: Omit<Alert, "tenantId">): Omit<Incident, "tenantId"> => ({
 		id: randomUUID() as IncidentId,
@@ -210,17 +216,74 @@ describe.each([
 			).toBe(0);
 		});
 
-		it("claims due alerts oldest first, increments attempts and leases them", async () => {
+		it("records a send, for the alert's own tenant only", async () => {
+			const alert = newAlert();
+			await stores.alerts.enqueue(acme, alert);
+
+			await stores.alerts.markSent(globex, alert.id, at(1));
+			expect((await stored())[0]?.sentAt).toBeNull();
+			await stores.alerts.markSent(acme, alert.id, at(2));
+			expect((await stored())[0]?.sentAt).toEqual(at(2));
+		});
+
+		it("starts an attempt only on the tenant's pending alert, and leases it", async () => {
+			const alert = newAlert();
+			await stores.alerts.enqueue(acme, alert);
+
+			expect(await stores.alerts.startAttempt(globex, alert.id, at(60_000))).toBeNull();
+			expect(await stores.alerts.startAttempt(acme, randomUUID(), at(60_000))).toBeNull();
+			const started = await stores.alerts.startAttempt(acme, alert.id, at(60_000));
+			expect(started).toEqual({ ...alert, tenantId: acme, attempts: 1, nextAttemptAt: at(60_000) });
+			expect((await stores.alerts.startAttempt(acme, alert.id, at(70_000)))?.attempts).toBe(2);
+
+			await stores.alerts.complete(acme, alert.id, null, at());
+			expect(await stores.alerts.startAttempt(acme, alert.id, at(80_000))).toBeNull();
+			expect((await stored())[0]?.attempts).toBe(2);
+		});
+
+		it("claims overdue alerts oldest first, with a longer cutoff once sent, across tenants", async () => {
 			const second = newAlert({ receivedAt: at(500) });
 			const first = newAlert();
-			const notDue = newAlert({ nextAttemptAt: at(10_000) });
-			for (const alert of [second, first, notDue]) await stores.alerts.enqueue(acme, alert);
+			const otherTenant = newAlert({ receivedAt: at(700) });
+			const sentLongAgo = newAlert({
+				receivedAt: at(900),
+				nextAttemptAt: at(-10_000),
+				sentAt: at(-10_000),
+			});
+			const sentRecently = newAlert({ nextAttemptAt: at(-9_999), sentAt: at(-9_999) });
+			const notDue = newAlert({ nextAttemptAt: at(1) });
+			for (const alert of [second, first, sentLongAgo, sentRecently, notDue]) {
+				await stores.alerts.enqueue(acme, alert);
+			}
+			const globexSource = (await stores.sources.create(
+				globex,
+				newSource("prometheus"),
+			)) as AlertSource;
+			await stores.alerts.enqueue(globex, { ...otherTenant, sourceId: globexSource.id });
 
-			const claimed = await claimAll();
+			const claimed = await claimOverdue();
 
-			expect(claimed.map((alert) => alert.id)).toEqual([first.id, second.id]);
-			expect(claimed[0]).toMatchObject({ attempts: 1, nextAttemptAt: at(60_000) });
-			expect(await claimAll()).toEqual([]);
+			expect(claimed).toEqual([
+				{ tenantId: acme, alertId: first.id },
+				{ tenantId: acme, alertId: second.id },
+				{ tenantId: globex, alertId: otherTenant.id },
+				{ tenantId: acme, alertId: sentLongAgo.id },
+			]);
+			const byId = new Map((await stored()).map((alert) => [alert.id, alert]));
+			expect(byId.get(first.id)).toMatchObject({ nextAttemptAt: at(60_000), attempts: 0 });
+			expect(byId.get(sentRecently.id)?.nextAttemptAt).toEqual(at(-9_999));
+			expect(await claimOverdue()).toEqual([]);
+		});
+
+		it("never claims a processed or failed alert", async () => {
+			const processed = newAlert();
+			const failed = newAlert();
+			await stores.alerts.enqueue(acme, processed);
+			await stores.alerts.enqueue(acme, failed);
+			await stores.alerts.complete(acme, processed.id, null, at());
+			await stores.alerts.fail(acme, failed.id, "boom", null, at());
+
+			expect(await claimOverdue()).toEqual([]);
 		});
 
 		it("opens an incident for a new key, then attaches the next alert to it", async () => {
@@ -354,12 +417,19 @@ describe("alert grouping races in postgres", () => {
 				incidentId: null,
 				receivedAt: now,
 				processedAt: null,
+				sentAt: null,
 			});
 		}
+		const queue = new InMemoryAlertQueue({ now: () => now });
+		for (const { id } of (await alerts.list(tenantId, { limit: count, offset: 0 })).items) {
+			await queue.send({ tenantId, alertId: id });
+		}
 		const worker = () =>
-			createAlertProcessor({ queue: alerts, alerts, now: () => now, batchSize: 1 });
+			createAlertProcessor({ queue, alerts, outbox: alerts, now: () => now, batchSize: 1 });
 
-		const claimed = await Promise.all(Array.from({ length: count }, () => worker().processBatch()));
+		const claimed = await Promise.all(
+			Array.from({ length: count }, () => worker().processMessages()),
+		);
 
 		expect(claimed.reduce((sum, n) => sum + n, 0)).toBe(count);
 		const { rows } = await pool.query<{ alert_count: number }>(

@@ -1,8 +1,10 @@
+import { SQSClient } from "@aws-sdk/client-sqs";
 import { Pool } from "pg";
 import { createAesGcmSecretBox } from "../adapters/aesGcmSecretBox";
 import { createArgon2PasswordHasher } from "../adapters/argon2PasswordHasher";
 import { createHmacAlertSignatureVerifier } from "../adapters/hmacAlertSignature";
 import { createJwtTokenService } from "../adapters/jwtTokenService";
+import { createSqsAlertQueue } from "../adapters/sqsAlertQueue";
 import type { Config } from "../config";
 import { createApp } from "../http/app";
 import { PostgresAccountRepository } from "../repository/accounts/postgresAccountRepository";
@@ -20,7 +22,17 @@ import { createMemberService } from "../services/members/memberService";
 import { createNotificationChannelService } from "../services/notifications/notificationChannelService";
 
 // The composition root: the only place that picks concrete repositories and adapters.
-export const buildApp = (config: Config) => {
+
+const buildAlertQueue = (config: Config) =>
+	createSqsAlertQueue(
+		new SQSClient({ region: config.AWS_REGION, endpoint: config.AWS_ENDPOINT_URL }),
+		config.ALERT_QUEUE_URL,
+	);
+
+export const buildApp = (
+	config: Config,
+	onAlertSendError: (alertId: string, error: unknown) => void,
+) => {
 	const pool = new Pool({ connectionString: config.DATABASE_URL });
 	const accounts = new PostgresAccountRepository(pool);
 	const authService = createAuthService({
@@ -49,17 +61,24 @@ export const buildApp = (config: Config) => {
 		alertIngestService: createAlertIngestService({
 			sources: alertSources,
 			alerts,
+			queue: buildAlertQueue(config),
 			secrets,
 			signatures: createHmacAlertSignatureVerifier(),
+			onSendError: onAlertSendError,
 		}),
 	});
 	return { app, pool };
 };
 
 // The alert worker: turns queued alerts into incidents. See src/worker.ts.
-export const buildWorker = (config: Config, onError: (alertId: string, error: unknown) => void) => {
+export const buildWorker = (config: Config, onError: (subject: string, error: unknown) => void) => {
 	const pool = new Pool({ connectionString: config.DATABASE_URL });
 	const alerts = new PostgresAlertRepository(pool);
-	const processor = createAlertProcessor({ queue: alerts, alerts, onError });
+	const processor = createAlertProcessor({
+		queue: buildAlertQueue(config),
+		alerts,
+		outbox: alerts,
+		onError,
+	});
 	return { processor, pool };
 };

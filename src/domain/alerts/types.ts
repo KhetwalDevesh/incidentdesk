@@ -41,15 +41,22 @@ export type Alert = {
 	details: AlertDetails;
 	state: (typeof ALERT_STATES)[number];
 	attempts: number;
+	// When this alert should have been handled by. The sweeper re-sends a pending alert only
+	// once this is overdue by its cutoff. See docs/features/alert-queue-sqs.md.
 	nextAttemptAt: Date;
 	// Internal error text. Never leaves the API.
 	lastError: string | null;
 	incidentId: IncidentId | null;
 	receivedAt: Date;
 	processedAt: Date | null;
+	// When a queue message for this alert was last confirmed sent. Null until one is.
+	sentAt: Date | null;
 };
 
 export type AlertPage = { items: Alert[]; total: number };
+
+// What a queue message carries. The alerts row stays the source of truth for everything else.
+export type AlertRef = { tenantId: TenantId; alertId: string };
 
 // Tenant-scoped. Every method takes tenantId first, like every repository.
 export interface AlertSourceRepository {
@@ -68,6 +75,12 @@ export interface AlertRepository {
 	enqueue(tenantId: TenantId, alert: Omit<Alert, "tenantId">): Promise<Alert>;
 	// Newest first.
 	list(tenantId: TenantId, query: AlertListQuery): Promise<AlertPage>;
+	// Records that a queue message for the alert was sent.
+	markSent(tenantId: TenantId, alertId: string, sentAt: Date): Promise<void>;
+	// Starts an attempt on a pending alert: increments attempts and moves nextAttemptAt to
+	// `leaseUntil`, so the sweeper leaves it alone while it is in flight. Returns null when the
+	// alert is unknown or no longer pending, which makes a duplicate message a no-op.
+	startAttempt(tenantId: TenantId, alertId: string, leaseUntil: Date): Promise<Alert | null>;
 	// Atomically groups a pending alert and marks it processed, in one transaction:
 	// - with a candidate, attaches to the unresolved incident for the alert's source and key,
 	//   or inserts the candidate when there is none;
@@ -90,12 +103,30 @@ export interface AlertRepository {
 	): Promise<void>;
 }
 
-// Runs across every tenant: the worker serves them all. Audit every caller.
+// Runs across every tenant: the sweeper serves them all. Audit every caller.
+export interface AlertOutbox {
+	// Claims up to `limit` pending alerts, oldest first, whose nextAttemptAt is at or before
+	// `unsentBefore` when they were never sent, or at or before `sentBefore` when they were.
+	// Each claim moves nextAttemptAt to `now`, so a concurrent sweeper skips it.
+	claimOverdue(
+		cutoffs: { unsentBefore: Date; sentBefore: Date },
+		now: Date,
+		limit: number,
+	): Promise<AlertRef[]>;
+}
+
+// A received message. `body` is untrusted until parsed. `receipt` identifies this delivery.
+export type AlertQueueMessage = { id: string; receipt: string; body: string };
+
+// Delivery is at least once: a message can arrive more than once, in any order.
 export interface AlertQueue {
-	// Claims up to `limit` pending alerts due at `now`, oldest first. Each claim increments
-	// attempts and leases the alert until `leaseUntil`, so another worker skips it meanwhile.
-	// A worker that dies mid-alert leaves it to be claimed again when the lease ends.
-	claimDue(now: Date, limit: number, leaseUntil: Date): Promise<Alert[]>;
+	send(ref: AlertRef): Promise<void>;
+	// Waits up to `waitSeconds` for messages. A received message stays hidden from other
+	// receivers for the queue's visibility timeout, then comes back unless deleted.
+	receive(max: number, waitSeconds: number): Promise<AlertQueueMessage[]>;
+	delete(message: AlertQueueMessage): Promise<void>;
+	// Hides the message for `delayMs` from now, so it is redelivered then.
+	retryAfter(message: AlertQueueMessage, delayMs: number): Promise<void>;
 }
 
 export interface AlertSignatureVerifier {
@@ -136,6 +167,8 @@ export interface AlertIngestService {
 }
 
 export interface AlertProcessor {
-	// Claims and processes one batch. Returns how many alerts it claimed.
-	processBatch(): Promise<number>;
+	// Receives and handles one batch of queue messages. Returns how many it received.
+	processMessages(): Promise<number>;
+	// Re-sends overdue pending alerts. Returns how many it claimed.
+	sweep(): Promise<number>;
 }
