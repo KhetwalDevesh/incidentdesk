@@ -84,6 +84,11 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		return null;
 	}
 
+	// The tenant's incidents, for the dashboard's in-memory twin.
+	allSync(tenantId: TenantId): Incident[] {
+		return [...this.incidents.values()].filter((incident) => incident.tenantId === tenantId);
+	}
+
 	putSync(incident: Incident) {
 		this.incidents.set(incident.id, incident);
 	}

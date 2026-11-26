@@ -1,6 +1,6 @@
 # Dashboard stats
 
-Status: Approved
+Status: Done
 
 Phase 4, "dashboard". One read-only endpoint that tells a team, at a glance, how much is on fire right now and who is carrying it.
 
@@ -118,8 +118,8 @@ Code, following the incidents shape:
 
 ## Done when
 
-- [ ] Totals, severity counts, unassigned and load are counted the same in memory and in Postgres, with and without a window, and resolved incidents never count (`tests/dashboardRepository.parity.test.ts`)
-- [ ] `GET /v1/dashboard` returns the documented shape to responders and admins, sorts and caps the load list, and returns 422 for each bad window (`tests/dashboard.contract.test.ts`)
-- [ ] Another tenant's incidents and assignees never appear (`tests/security.test.ts`, "dashboard")
-- [ ] Contract regenerated: one new path, no breaking change
-- [ ] `pnpm check` passes
+- [x] Totals, severity counts, unassigned and load are counted the same in memory and in Postgres, with and without a window, and resolved incidents never count (`tests/dashboardRepository.parity.test.ts`)
+- [x] `GET /v1/dashboard` returns the documented shape to responders and admins, sorts and caps the load list, and returns 422 for each bad window, naming the field to fix (`tests/dashboard.contract.test.ts`)
+- [x] Another tenant's incidents and assignees never appear (`tests/security.test.ts`, "dashboard")
+- [x] Contract regenerated: one new path, no breaking change
+- [x] `pnpm check` passes

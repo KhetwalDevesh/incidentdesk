@@ -753,6 +753,129 @@ components:
       required:
         - onCallScheduleId
       additionalProperties: false
+    Dashboard:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        window:
+          type:
+            - object
+            - "null"
+          properties:
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+          required:
+            - from
+            - to
+          additionalProperties: false
+        totals:
+          type: object
+          properties:
+            open:
+              type: integer
+            acknowledged:
+              type: integer
+            unassigned:
+              type: integer
+          required:
+            - open
+            - acknowledged
+            - unassigned
+          additionalProperties: false
+        bySeverity:
+          type: object
+          properties:
+            sev1:
+              type: object
+              properties:
+                open:
+                  type: integer
+                acknowledged:
+                  type: integer
+              required:
+                - open
+                - acknowledged
+              additionalProperties: false
+            sev2:
+              type: object
+              properties:
+                open:
+                  type: integer
+                acknowledged:
+                  type: integer
+              required:
+                - open
+                - acknowledged
+              additionalProperties: false
+            sev3:
+              type: object
+              properties:
+                open:
+                  type: integer
+                acknowledged:
+                  type: integer
+              required:
+                - open
+                - acknowledged
+              additionalProperties: false
+            sev4:
+              type: object
+              properties:
+                open:
+                  type: integer
+                acknowledged:
+                  type: integer
+              required:
+                - open
+                - acknowledged
+              additionalProperties: false
+          required:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+          additionalProperties: false
+        load:
+          type: array
+          items:
+            type: object
+            properties:
+              userId:
+                type: string
+                format: uuid
+              email:
+                type: string
+              open:
+                type: integer
+              acknowledged:
+                type: integer
+              total:
+                type: integer
+            required:
+              - userId
+              - email
+              - open
+              - acknowledged
+              - total
+            additionalProperties: false
+        assigneeCount:
+          type: integer
+      required:
+        - generatedAt
+        - window
+        - totals
+        - bySeverity
+        - load
+        - assigneeCount
+      additionalProperties: false
+      description: Unresolved incidents, read now, optionally narrowed to those opened
+        in a window.
     OnCallSchedule:
       type: object
       properties:
@@ -2200,6 +2323,46 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Id or body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/dashboard:
+    get:
+      summary: Live counts of unresolved incidents, and who holds them
+      description: "Every member may read it. With from and to, every number counts
+        only unresolved incidents opened in that range. Spec:
+        docs/features/dashboard-stats.md."
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: from
+          in: query
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: to
+          in: query
+      responses:
+        "200":
+          description: The dashboard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: "Query failed validation: give both from and to, from before to, at
+            most 90 days apart"
           content:
             application/problem+json:
               schema:

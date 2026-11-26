@@ -25,6 +25,7 @@ import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAc
 import { InMemoryAlertRepository } from "../src/repository/alerts/inMemoryAlertRepository";
 import { InMemoryAlertSourceRepository } from "../src/repository/alerts/inMemoryAlertSourceRepository";
 import { InMemoryAuditStore } from "../src/repository/audit/inMemoryAuditStore";
+import { InMemoryIncidentStatsReader } from "../src/repository/dashboard/inMemoryIncidentStatsReader";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { InMemoryNotificationDeliveryRepository } from "../src/repository/notifications/inMemoryNotificationDeliveryRepository";
@@ -35,6 +36,7 @@ import { createAlertService } from "../src/services/alerts/alertService";
 import { createAlertSourceService } from "../src/services/alerts/alertSourceService";
 import { createAuditService } from "../src/services/audit/auditService";
 import { createAuthService } from "../src/services/auth/authService";
+import { createDashboardService } from "../src/services/dashboard/dashboardService";
 import { createIncidentService } from "../src/services/incidents/incidentService";
 import { createMemberService } from "../src/services/members/memberService";
 import { createDeliveryDispatcher } from "../src/services/notifications/deliveryDispatcher";
@@ -157,6 +159,11 @@ export const buildTestSystem = (
 		}),
 		auditService: createAuditService(audit, incidents),
 		onCallScheduleService: createOnCallScheduleService(schedules, options.alertNow),
+		dashboardService: createDashboardService({
+			stats: new InMemoryIncidentStatsReader(incidents),
+			members: accounts,
+			now: options.alertNow,
+		}),
 	});
 	const processor = createAlertProcessor({
 		queue,
