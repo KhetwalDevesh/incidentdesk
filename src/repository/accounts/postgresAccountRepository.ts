@@ -1,13 +1,16 @@
 import type { Pool, PoolClient } from "pg";
 import type { PageQuery } from "../../contract/common";
 import type { AuditEntry } from "../../domain/audit/types";
-import type {
-	AccountRepository,
-	CredentialStore,
-	NewSetupToken,
-	Tenant,
-	User,
-	UserPage,
+import {
+	type AccountRepository,
+	type CredentialStore,
+	keepsActiveAdmin,
+	type MemberChangeOutcome,
+	type NewSetupToken,
+	type RoleChange,
+	type Tenant,
+	type User,
+	type UserPage,
 } from "../../domain/auth/types";
 import type { Role, TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
@@ -155,4 +158,91 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 			return true;
 		});
 	}
+
+	async changeRoles(
+		tenantId: TenantId,
+		changes: RoleChange[],
+		audit: (before: User, after: User) => AuditEntry,
+	): Promise<MemberChangeOutcome> {
+		return inTransaction(this.pool, async (client) => {
+			const locked = await lockForMemberChange(
+				client,
+				tenantId,
+				changes.map((change) => change.userId),
+			);
+			if (!locked.ok) {
+				return { applied: false, rejection: { reason: "not_found", indexes: locked.missing } };
+			}
+			const after = changes.map((change, index) => ({
+				...(locked.users[index] as User),
+				role: change.role,
+			}));
+			if (!keepsActiveAdmin(locked.activeAdmins, new Map(after.map((user) => [user.id, user])))) {
+				return { applied: false, rejection: { reason: "last_admin" } };
+			}
+			const entries: AuditEntry[] = [];
+			for (const [index, before] of locked.users.entries()) {
+				const changed = after[index] as User;
+				if (before.role === changed.role) continue;
+				await client.query("UPDATE users SET role = $3 WHERE tenant_id = $1 AND id = $2", [
+					tenantId,
+					changed.id,
+					changed.role,
+				]);
+				entries.push(audit(before, changed));
+			}
+			await insertAuditEntries(client, entries);
+			return { applied: true, users: after };
+		});
+	}
+
+	async removeUsers(
+		tenantId: TenantId,
+		userIds: string[],
+		audit: (removed: User) => AuditEntry,
+	): Promise<MemberChangeOutcome> {
+		return inTransaction(this.pool, async (client) => {
+			const locked = await lockForMemberChange(client, tenantId, userIds);
+			if (!locked.ok) {
+				return { applied: false, rejection: { reason: "not_found", indexes: locked.missing } };
+			}
+			if (!keepsActiveAdmin(locked.activeAdmins, new Map(userIds.map((id) => [id, null])))) {
+				return { applied: false, rejection: { reason: "last_admin" } };
+			}
+			// password_setup_tokens cascade, so a pending member's invite dies with them.
+			await client.query("DELETE FROM users WHERE tenant_id = $1 AND id = ANY($2::uuid[])", [
+				tenantId,
+				userIds,
+			]);
+			await insertAuditEntries(client, locked.users.map(audit));
+			return { applied: true, users: locked.users };
+		});
+	}
 }
+
+// Locks the tenant's active admins, then the targeted users, each in id order, so concurrent
+// batches queue behind each other instead of deadlocking. A batch that waited sees the
+// committed result of the one before it: a deleted row is gone, a demoted admin no longer
+// matches. Returns the targets in request order, or the indexes of ids the tenant lacks.
+const lockForMemberChange = async (client: PoolClient, tenantId: TenantId, userIds: string[]) => {
+	const admins = await client.query<UserRow>(
+		`SELECT ${USER_COLUMNS} FROM users
+		WHERE tenant_id = $1 AND role = 'admin' AND password_hash IS NOT NULL
+		ORDER BY id FOR UPDATE`,
+		[tenantId],
+	);
+	const targets = await client.query<UserRow>(
+		`SELECT ${USER_COLUMNS} FROM users WHERE tenant_id = $1 AND id = ANY($2::uuid[])
+		ORDER BY id FOR UPDATE`,
+		[tenantId, userIds],
+	);
+	const byId = new Map(targets.rows.map((row) => [row.id, toUser(row)]));
+	const missing = userIds.flatMap((id, index) => (byId.has(id) ? [] : [index]));
+	return missing.length > 0
+		? ({ ok: false, missing } as const)
+		: ({
+				ok: true,
+				users: userIds.map((id) => byId.get(id) as User),
+				activeAdmins: admins.rows.map(toUser),
+			} as const);
+};

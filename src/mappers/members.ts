@@ -1,12 +1,12 @@
 import type { MemberInviteResponse, MemberResponse } from "../contract/members";
-import type { MemberInvite, User } from "../domain/auth/types";
+import { type MemberInvite, memberStatus, type User } from "../domain/auth/types";
 
 // The allowlist of what leaves the API. passwordHash and tenantId never do.
 export const toMemberResponse = (user: User): MemberResponse => ({
 	id: user.id,
 	email: user.email,
 	role: user.role,
-	status: user.passwordHash === null ? "pending" : "active",
+	status: memberStatus(user),
 	createdAt: user.createdAt.toISOString(),
 });
 

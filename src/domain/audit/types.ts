@@ -25,6 +25,8 @@ export type AuditDetails = {
 	"tenant.created": { name: string };
 	"member.invited": { role: string };
 	"member.setup_completed": Record<string, never>;
+	"member.role_changed": { from: string; to: string };
+	"member.removed": { role: string; status: string };
 	"user.login_succeeded": Record<string, never>;
 	"user.login_failed": Record<string, never>;
 	"incident.created": { title: string; severity: string };

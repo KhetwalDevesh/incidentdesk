@@ -180,4 +180,153 @@ describe.each([
 
 		expect(results.filter((result) => result !== null)).toHaveLength(1);
 	});
+
+	describe("member changes", () => {
+		const roleAudit = (before: User) =>
+			anAudit(tenant.id, "member.role_changed", { resource: { type: "user", id: before.id } });
+		const removeAudit = (removed: User) =>
+			anAudit(tenant.id, "member.removed", { resource: { type: "user", id: removed.id } });
+		const add = async (
+			email: string,
+			overrides: Partial<Omit<User, "tenantId">> = {},
+			tokenHash: string = randomUUID(),
+		) => {
+			const user = newUser(email, overrides);
+			await repository.addUser(
+				tenant.id,
+				user,
+				{ tokenHash, expiresAt: LATER },
+				anAudit(tenant.id, "member.invited"),
+			);
+			return user;
+		};
+		const roles = async () =>
+			Object.fromEntries(
+				(await repository.listUsers(tenant.id, { limit: 50, offset: 0 })).items.map((user) => [
+					user.email,
+					user.role,
+				]),
+			);
+
+		it("changes roles all at once, returns members in request order, and audits only real changes", async () => {
+			const grace = await add("grace@example.com", { role: "responder", passwordHash: "h" });
+			const linus = await add("linus@example.com");
+			let audited = 0;
+
+			const outcome = await repository.changeRoles(
+				tenant.id,
+				[
+					{ userId: linus.id, role: "admin" },
+					{ userId: grace.id, role: "responder" },
+				],
+				(before) => {
+					audited += 1;
+					return roleAudit(before);
+				},
+			);
+
+			expect(outcome).toMatchObject({
+				applied: true,
+				users: [
+					{ id: linus.id, role: "admin", passwordHash: null },
+					{ id: grace.id, role: "responder" },
+				],
+			});
+			expect(audited).toBe(1);
+			expect(await roles()).toMatchObject({
+				"linus@example.com": "admin",
+				"grace@example.com": "responder",
+			});
+		});
+
+		it("refuses a batch naming an unknown or another tenant's id, listing each, and changes nothing", async () => {
+			const grace = await add("grace@example.com");
+			const other = newTenant();
+			const stranger = newUser("stranger@example.com");
+			await repository.createTenantWithAdmin(other, stranger, anAudit(other.id, "tenant.created"));
+
+			const changed = await repository.changeRoles(
+				tenant.id,
+				[
+					{ userId: grace.id, role: "admin" },
+					{ userId: randomUUID(), role: "admin" },
+					{ userId: stranger.id, role: "viewer" },
+				],
+				roleAudit,
+			);
+			const removed = await repository.removeUsers(tenant.id, [stranger.id, grace.id], removeAudit);
+
+			expect(changed).toEqual({
+				applied: false,
+				rejection: { reason: "not_found", indexes: [1, 2] },
+			});
+			expect(removed).toEqual({ applied: false, rejection: { reason: "not_found", indexes: [0] } });
+			expect(await roles()).toMatchObject({ "grace@example.com": "viewer" });
+			expect(await repository.findUser(other.id, stranger.id)).not.toBeNull();
+		});
+
+		it("removes users with their setup tokens, and frees their emails", async () => {
+			const pending = await add("grace@example.com", {}, "token-grace");
+			const active = await add("linus@example.com", { passwordHash: "h" });
+
+			const outcome = await repository.removeUsers(tenant.id, [pending.id, active.id], removeAudit);
+
+			expect(outcome).toMatchObject({
+				applied: true,
+				users: [{ id: pending.id }, { id: active.id }],
+			});
+			expect(await repository.findUser(tenant.id, active.id)).toBeNull();
+			expect(await repository.redeemSetupToken("token-grace", NOW, "hash", setupAudit)).toBeNull();
+			expect(await add("grace@example.com")).toBeDefined();
+			expect(Object.keys(await roles()).sort()).toEqual(["ada@example.com", "grace@example.com"]);
+		});
+
+		it("never leaves the tenant without an active admin, and a pending admin does not count", async () => {
+			await add("pending-admin@example.com", { role: "admin" });
+			const responder = await add("grace@example.com", { role: "responder", passwordHash: "h" });
+
+			expect(await repository.removeUsers(tenant.id, [admin.id], removeAudit)).toEqual({
+				applied: false,
+				rejection: { reason: "last_admin" },
+			});
+			expect(
+				await repository.changeRoles(tenant.id, [{ userId: admin.id, role: "viewer" }], roleAudit),
+			).toEqual({
+				applied: false,
+				rejection: { reason: "last_admin" },
+			});
+			// Promoting an active member in the same batch keeps an admin, so this applies.
+			const swap = await repository.changeRoles(
+				tenant.id,
+				[
+					{ userId: admin.id, role: "viewer" },
+					{ userId: responder.id, role: "admin" },
+				],
+				roleAudit,
+			);
+
+			expect(swap.applied).toBe(true);
+			expect(await roles()).toMatchObject({
+				"ada@example.com": "viewer",
+				"grace@example.com": "admin",
+			});
+		});
+
+		it("lets only one of two admins removing each other at once succeed", async () => {
+			const grace = await add("grace@example.com", { role: "admin", passwordHash: "h" });
+
+			const outcomes = await Promise.all([
+				repository.removeUsers(tenant.id, [grace.id], removeAudit),
+				repository.removeUsers(tenant.id, [admin.id], removeAudit),
+			]);
+
+			expect(outcomes.map((outcome) => outcome.applied).sort()).toEqual([false, true]);
+			expect(outcomes.find((outcome) => !outcome.applied)).toEqual({
+				applied: false,
+				rejection: { reason: "last_admin" },
+			});
+			const left = (await repository.listUsers(tenant.id, { limit: 10, offset: 0 })).items;
+			expect(left.filter((user) => user.role === "admin")).toHaveLength(1);
+		});
+	});
 });

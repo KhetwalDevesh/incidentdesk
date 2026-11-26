@@ -577,3 +577,80 @@ describe("audit log", () => {
 		}
 	});
 });
+
+describe("member management changes", () => {
+	let app: ReturnType<typeof buildTestApp>;
+
+	beforeEach(() => {
+		app = buildTestApp();
+	});
+
+	const send = (method: string, path: string, token: string, body?: unknown) =>
+		app.request(path, {
+			method,
+			headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+			...(body === undefined ? {} : { body: JSON.stringify(body) }),
+		});
+
+	const inviteTo = async (adminToken: string, email: string, role: string) =>
+		MemberInviteSchema.parse(
+			await (await app.request("/v1/members", authed(adminToken, { email, role }))).json(),
+		);
+
+	it.each(["viewer", "responder"])(
+		"forbids a %s from changing or removing members",
+		async (role) => {
+			const admin = await signup(app, "ada@acme.example", "Acme");
+			const target = await inviteTo(admin, "grace@acme.example", "viewer");
+			const member = await inviteTo(admin, `${role}@acme.example`, role);
+			const login = await app.request(
+				"/v1/auth/setup-password",
+				post({ token: member.setupToken, password: "correct horse battery" }),
+			);
+			const token = AccessTokenSchema.parse(await login.json()).accessToken;
+
+			const statuses = await Promise.all([
+				send("PATCH", `/v1/members/${target.id}`, token, { role: "admin" }),
+				send("DELETE", `/v1/members/${target.id}`, token),
+				send("PATCH", "/v1/members", token, { changes: [{ id: target.id, role: "admin" }] }),
+				send("POST", "/v1/members/remove", token, { ids: [target.id] }),
+			]);
+
+			expect(statuses.map((res) => res.status)).toEqual([403, 403, 403, 403]);
+			const members = MemberListSchema.parse(
+				await (await app.request("/v1/members", authed(admin))).json(),
+			);
+			expect(members.items.find((m) => m.id === target.id)?.role).toBe("viewer");
+		},
+	);
+
+	it("hides another tenant's member, alone or inside a bulk request", async () => {
+		const acme = await signup(app, "ada@acme.example", "Acme");
+		const globex = await signup(app, "hank@globex.example", "Globex");
+		const target = await inviteTo(acme, "grace@acme.example", "viewer");
+		const own = await inviteTo(globex, "frank@globex.example", "viewer");
+
+		const results = await Promise.all([
+			send("PATCH", `/v1/members/${target.id}`, globex, { role: "admin" }),
+			send("DELETE", `/v1/members/${target.id}`, globex),
+			send("PATCH", "/v1/members", globex, {
+				changes: [
+					{ id: own.id, role: "responder" },
+					{ id: target.id, role: "admin" },
+				],
+			}),
+			send("POST", "/v1/members/remove", globex, { ids: [own.id, target.id] }),
+		]);
+
+		expect(results.map((res) => res.status)).toEqual([404, 404, 404, 404]);
+		const acmeMembers = MemberListSchema.parse(
+			await (await app.request("/v1/members", authed(acme))).json(),
+		);
+		expect(acmeMembers.items.find((m) => m.id === target.id)?.role).toBe("viewer");
+		// All or nothing: globex's own member was not changed or removed either.
+		const globexMembers = MemberListSchema.parse(
+			await (await app.request("/v1/members", authed(globex))).json(),
+		);
+		expect(globexMembers.items.find((m) => m.id === own.id)?.role).toBe("viewer");
+	});
+});
