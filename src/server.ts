@@ -11,6 +11,11 @@ const { app, pool } = buildApp(config, {
 			`Alert ${alertId} was saved but not queued; the sweeper will send it:`,
 			message(error),
 		),
+	onDeliverySendError: (deliveryId, error) =>
+		console.error(
+			`Delivery ${deliveryId} was saved but not queued; the sweeper will send it:`,
+			message(error),
+		),
 	onAuditError: (entryId, error) =>
 		console.error(`Audit entry ${entryId} was not recorded:`, message(error)),
 });

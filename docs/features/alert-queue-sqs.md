@@ -62,7 +62,7 @@ Migration `0008_add_alert_sent_at.sql` adds a nullable `alerts.sent_at timestamp
 Code:
 
 - New port `AlertQueue` (replaces the `claimDue` one): `send(ref)`, `receive(max, waitSeconds)`, `delete(message)`, `retryAfter(message, delayMs)`.
-- Adapters: `src/adapters/sqsAlertQueue.ts` (`@aws-sdk/client-sqs`) and an in-memory queue for unit and contract tests.
+- Adapters: `src/adapters/sqsQueue.ts` (`@aws-sdk/client-sqs`) and an in-memory queue for unit and contract tests.
 - `AlertRepository` gains `startAttempt(tenantId, alertId, leaseUntil)`, which returns the alert or null, and `markSent(tenantId, alertId, sentAt)`. The pre-tenant `claimDue` becomes `claimOverdue({ unsentBefore, sentBefore }, now, limit)` on a separate `AlertOutbox` port, used only by the sweeper. The processor computes the two cutoffs, so the repository holds no timing policy.
 - `AlertProcessor` gets `processMessages()` and `sweep()`. `src/worker.ts` runs both.
 - Config: `AWS_REGION`, `ALERT_QUEUE_URL`, and an optional `AWS_ENDPOINT_URL` for an emulator, unused by default. Credentials come from the default AWS provider chain. `.env.example` names a profile in `AWS_PROFILE` and holds no keys.

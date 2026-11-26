@@ -73,7 +73,9 @@ const setup = async ({ name, region }: SetupOptions) => {
 
 	console.log(`Queue:             ${queue.QueueUrl}`);
 	console.log(`Dead-letter queue: ${dlq.QueueUrl}`);
-	console.log(`\nAdd to .env:\nAWS_REGION=${region}\nALERT_QUEUE_URL=${queue.QueueUrl}`);
+	// The same setup serves the alert and the notification queue; the name says which.
+	const variable = name.includes("notifications") ? "NOTIFICATION_QUEUE_URL" : "ALERT_QUEUE_URL";
+	console.log(`\nAdd to .env:\nAWS_REGION=${region}\n${variable}=${queue.QueueUrl}`);
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

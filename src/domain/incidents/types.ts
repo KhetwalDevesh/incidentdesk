@@ -1,6 +1,7 @@
 import type { PageQuery } from "../../contract/common";
 import type { CreateIncidentRequest, IncidentId } from "../../contract/incidents";
 import type { AuditEntry } from "../audit/types";
+import type { DeliveryNotice } from "../notifications/types";
 import type { Principal, TenantId } from "../shared/identity";
 import type { RequestContext } from "../shared/request";
 import type { Result } from "../shared/result";
@@ -32,11 +33,13 @@ export type IncidentChanges = Partial<
 
 // Every method takes tenantId first, so a cross-tenant read cannot be written by accident.
 // Write methods take the audit entry for their change and store both in one transaction.
+// A `notice` adds the change's Slack deliveries to the same transaction.
 export interface IncidentRepository {
 	create(
 		tenantId: TenantId,
 		incident: Omit<Incident, "tenantId">,
 		audit: AuditEntry,
+		notice?: DeliveryNotice,
 	): Promise<Incident>;
 	findById(tenantId: TenantId, id: IncidentId): Promise<Incident | null>;
 	list(tenantId: TenantId, page: PageQuery): Promise<IncidentPage>;
@@ -47,8 +50,9 @@ export interface IncidentRepository {
 		id: IncidentId,
 		expectedStatus: Incident["status"],
 		changes: IncidentChanges,
-		// Written only when the update applies.
+		// Written only when the update applies, like the notice's deliveries.
 		audit: AuditEntry,
+		notice?: DeliveryNotice,
 	): Promise<Incident | null>;
 }
 

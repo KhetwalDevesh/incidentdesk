@@ -8,9 +8,12 @@ import type {
 	AlertQueueMessage,
 	AlertRef,
 	AlertRepository,
+	AlertSourceLookup,
 } from "../../domain/alerts/types";
 import { type AuditEntry, auditEntry, auditOrigin } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
+import type { DeliveryDispatcher, DeliveryNotice } from "../../domain/notifications/types";
+import { NO_DISPATCH } from "../notifications/deliveryDispatcher";
 
 // Delay before retry n+1, after attempt n fails. Attempt 5 failing marks the alert failed.
 export const ALERT_RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 600_000] as const;
@@ -37,6 +40,10 @@ export type AlertProcessorDeps = {
 	sweepBatchSize?: number;
 	// Gets an alert or message id, never a payload, so logs cannot carry alert content.
 	onError?: (subject: string, error: unknown) => void;
+	// Names the source in the Slack message for an incident an alert opens.
+	sources?: AlertSourceLookup;
+	// Sends the queue messages for that incident's Slack deliveries, after it commits.
+	dispatcher?: DeliveryDispatcher;
 };
 
 const MAX_ID_LENGTH = 200;
@@ -108,6 +115,25 @@ const candidateFor = (alert: Alert, id: string, at: Date): Omit<Incident, "tenan
 			}
 		: null;
 
+// The Slack message for an incident an alert opened. Spec: docs/features/slack-delivery.md.
+const openedNotice = (
+	candidate: Omit<Incident, "tenantId">,
+	sourceName: string,
+): DeliveryNotice => ({
+	incidentId: candidate.id,
+	event: "incident.opened",
+	severity: candidate.severity,
+	createdAt: candidate.createdAt,
+	payload: {
+		title: candidate.title,
+		severity: candidate.severity,
+		actor: { type: "alert_source", name: sourceName },
+		alertCount: candidate.alertCount,
+		openedAt: candidate.createdAt.toISOString(),
+		occurredAt: candidate.createdAt.toISOString(),
+	},
+});
+
 export const createAlertProcessor = ({
 	queue,
 	alerts,
@@ -119,7 +145,15 @@ export const createAlertProcessor = ({
 	visibilityTimeoutMs = 60_000,
 	sweepBatchSize = 100,
 	onError = () => undefined,
+	sources,
+	dispatcher = NO_DISPATCH,
 }: AlertProcessorDeps): AlertProcessor => {
+	// findForIngest runs across tenants, so the source must belong to the alert's tenant.
+	const sourceName = async (alert: Alert) => {
+		const source = await sources?.findForIngest(alert.sourceId);
+		return source?.tenantId === alert.tenantId ? source.name : "unknown";
+	};
+
 	const handle = async (message: AlertQueueMessage) => {
 		const ref = parseRef(message.body);
 		if (!ref) {
@@ -155,13 +189,22 @@ export const createAlertProcessor = ({
 
 		try {
 			const at = now();
-			await alerts.complete(
+			const candidate = candidateFor(alert, newId(), at);
+			// Only a candidate can open an incident, so only then is the source's name needed.
+			const name = candidate ? await sourceName(alert) : null;
+			const completed = await alerts.complete(
 				alert.tenantId,
 				alert.id,
-				candidateFor(alert, newId(), at),
+				candidate,
 				at,
 				({ incidentId, opened }) => groupingAudit(alert, incidentId, opened, at),
+				({ opened }) =>
+					opened && candidate && name !== null ? openedNotice(candidate, name) : null,
 			);
+			// Opened means our candidate was inserted. An alert joining an incident posts nothing.
+			if (candidate && completed?.incidentId === candidate.id) {
+				await dispatcher.dispatch(alert.tenantId, candidate.id, "incident.opened");
+			}
 		} catch (error) {
 			onError(`alert ${alert.id}`, error);
 			const at = now();

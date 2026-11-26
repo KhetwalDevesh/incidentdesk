@@ -4,7 +4,7 @@ import {
 	createHmacAlertSignatureVerifier,
 	signAlertBody,
 } from "../src/adapters/hmacAlertSignature";
-import { InMemoryAlertQueue } from "../src/adapters/inMemoryAlertQueue";
+import { InMemoryQueue } from "../src/adapters/inMemoryQueue";
 import { createJwtTokenService } from "../src/adapters/jwtTokenService";
 import {
 	ALERT_SIGNATURE_HEADER,
@@ -12,6 +12,13 @@ import {
 	CreatedAlertSourceSchema,
 } from "../src/contract/alerts";
 import { AccessTokenSchema } from "../src/contract/auth";
+import type { AlertRef } from "../src/domain/alerts/types";
+import {
+	createWebhookPolicy,
+	type DeliveryRef,
+	type WebhookResult,
+	type WebhookSender,
+} from "../src/domain/notifications/types";
 import type { Principal, TenantId } from "../src/domain/shared/identity";
 import { createApp } from "../src/http/app";
 import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAccountRepository";
@@ -20,6 +27,7 @@ import { InMemoryAlertSourceRepository } from "../src/repository/alerts/inMemory
 import { InMemoryAuditStore } from "../src/repository/audit/inMemoryAuditStore";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
+import { InMemoryNotificationDeliveryRepository } from "../src/repository/notifications/inMemoryNotificationDeliveryRepository";
 import { createAlertIngestService } from "../src/services/alerts/alertIngestService";
 import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
 import { createAlertService } from "../src/services/alerts/alertService";
@@ -28,6 +36,8 @@ import { createAuditService } from "../src/services/audit/auditService";
 import { createAuthService } from "../src/services/auth/authService";
 import { createIncidentService } from "../src/services/incidents/incidentService";
 import { createMemberService } from "../src/services/members/memberService";
+import { createDeliveryDispatcher } from "../src/services/notifications/deliveryDispatcher";
+import { createDeliveryProcessor } from "../src/services/notifications/deliveryProcessor";
 import { createNotificationChannelService } from "../src/services/notifications/notificationChannelService";
 
 export const TEST_JWT_SECRET = "test-secret-that-is-at-least-32-characters";
@@ -45,6 +55,27 @@ const FIXED_TOKENS: Record<string, Principal> = {
 	},
 	"acme-admin": { tenantId: "tenant-acme" as TenantId, userId: "user-4", role: "admin" },
 };
+
+// The allowlist tests run with: Slack, plus the dev receiver as local development adds it.
+export const TEST_WEBHOOK_ORIGINS = ["https://hooks.slack.com", "http://127.0.0.1:4000"];
+
+// Records each POST and answers from a script, so tests never call a real webhook.
+export class FakeWebhookSender implements WebhookSender {
+	readonly posts: { url: string; body: unknown }[] = [];
+	// Answers in order; the last one repeats. Default: 200.
+	answers: WebhookResult[] = [];
+
+	async post(url: string, body: unknown): Promise<WebhookResult> {
+		this.posts.push({ url, body });
+		const answer = this.answers.length > 1 ? this.answers.shift() : this.answers[0];
+		return answer ?? { kind: "response", status: 200, retryAfter: null };
+	}
+
+	// The text of every message posted, in order.
+	get texts(): string[] {
+		return this.posts.map((post) => (post.body as { text: string }).text);
+	}
+}
 
 // Cheap argon2 costs keep the suite fast. Production uses the library defaults.
 export const testHasher = () => createArgon2PasswordHasher({ memoryCost: 1024, timeCost: 1 });
@@ -79,20 +110,31 @@ export const buildTestSystem = (
 		audit,
 	});
 	const secrets = createAesGcmSecretBox(TEST_ENCRYPTION_KEY);
-	const incidents = new InMemoryIncidentRepository(audit);
+	const channels = options.notificationChannels ?? new InMemoryNotificationChannelRepository(audit);
+	const deliveries = new InMemoryNotificationDeliveryRepository(channels);
+	const notificationQueue = new InMemoryQueue<DeliveryRef>({ now: options.alertNow });
+	const dispatcher = createDeliveryDispatcher({
+		deliveries,
+		queue: notificationQueue,
+		now: options.alertNow,
+	});
+	const policy = createWebhookPolicy(TEST_WEBHOOK_ORIGINS);
+	const incidents = new InMemoryIncidentRepository(audit, deliveries);
 	const alertSources = new InMemoryAlertSourceRepository(audit);
 	const alerts = new InMemoryAlertRepository(incidents);
-	const queue = new InMemoryAlertQueue({ now: options.alertNow });
+	const queue = new InMemoryQueue<AlertRef>({ now: options.alertNow });
 	const app = createApp({
 		authenticate: async (token) => FIXED_TOKENS[token] ?? authService.authenticate(token),
 		authService,
-		incidentService: createIncidentService(incidents),
+		incidentService: createIncidentService(incidents, { members: accounts, dispatcher }),
 		memberService: createMemberService(accounts),
-		notificationChannelService: createNotificationChannelService(
-			options.notificationChannels ?? new InMemoryNotificationChannelRepository(audit),
+		notificationChannelService: createNotificationChannelService({
+			channels,
+			deliveries,
 			secrets,
-			options.channelNow,
-		),
+			policy,
+			now: options.channelNow,
+		}),
 		alertSourceService: createAlertSourceService(alertSources, secrets),
 		alertService: createAlertService(alerts),
 		alertIngestService: createAlertIngestService({
@@ -110,8 +152,36 @@ export const buildTestSystem = (
 		alerts,
 		outbox: alerts,
 		now: options.alertNow,
+		sources: alertSources,
+		dispatcher,
 	});
-	return { app, processor, alerts, queue, audit };
+	const sender = new FakeWebhookSender();
+	const deliveryErrors: { subject: string; error: unknown }[] = [];
+	const deliveryProcessor = createDeliveryProcessor({
+		queue: notificationQueue,
+		deliveries,
+		outbox: deliveries,
+		channels,
+		secrets,
+		sender,
+		policy,
+		now: options.alertNow,
+		onError: (subject, error) => deliveryErrors.push({ subject, error }),
+	});
+	return {
+		app,
+		processor,
+		alerts,
+		queue,
+		audit,
+		accounts,
+		channels,
+		deliveries,
+		notificationQueue,
+		deliveryProcessor,
+		sender,
+		deliveryErrors,
+	};
 };
 
 export const authed = (token: string, body?: unknown): RequestInit => ({

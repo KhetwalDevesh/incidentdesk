@@ -8,8 +8,8 @@ Multi-tenant incident management API. Product scope: @docs/spec.md. Status: Phas
 - Start Postgres in Docker: `pnpm db:up` (stop with `pnpm db:down`)
 - Apply migrations: `pnpm db:migrate`
 - Run API: `pnpm dev` (copy `.env.example` to `.env` first)
-- Run alert worker: `pnpm dev:worker` (turns queued alerts into incidents)
-- Create your own SQS alert queue and DLQ: `pnpm sqs:setup --name incidentdesk-alerts-<you> --region <region>` (credentials from the AWS CLI profile in `AWS_PROFILE`)
+- Run worker: `pnpm dev:worker` (turns queued alerts into incidents, and posts Slack deliveries)
+- Create your own SQS queues and DLQs: `pnpm sqs:setup --name incidentdesk-alerts-<you> --region <region>`, and again with `incidentdesk-notifications-<you>` (credentials from the AWS CLI profile in `AWS_PROFILE`)
 - SQS adapter tests against a real queue: `pnpm test:sqs` (not in `pnpm check` or CI)
 - Local webhook receiver for notification channels: `pnpm dev:receiver --port 4000 --mode ok` (modes and runtime switching in `scripts/dev-receiver.ts`)
 - All checks: `pnpm check` (needs `pnpm db:up` for the repository parity tests)

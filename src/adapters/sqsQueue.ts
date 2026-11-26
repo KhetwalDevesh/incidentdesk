@@ -5,23 +5,25 @@ import {
 	SendMessageCommand,
 	type SQSClient,
 } from "@aws-sdk/client-sqs";
-import type { AlertQueue, AlertQueueMessage, AlertRef } from "../domain/alerts/types";
+import type { MessageQueue, QueueMessage } from "../domain/shared/queue";
 
 // SQS caps receives at 10 messages, long polls at 20 s and visibility at 12 hours.
 const MAX_RECEIVE = 10;
 const MAX_WAIT_SECONDS = 20;
 const MAX_VISIBILITY_SECONDS = 43_200;
 
-// An SQS standard queue. Spec: docs/features/alert-queue-sqs.md.
+// An SQS standard queue, for alerts and notification deliveries alike.
+// Specs: docs/features/alert-queue-sqs.md, docs/features/slack-delivery.md.
 // The client is built in the composition root, which owns region, endpoint and credentials.
-export const createSqsAlertQueue = (client: SQSClient, queueUrl: string): AlertQueue => ({
-	async send(ref: AlertRef) {
-		// Only the ids travel. The alerts row holds the content.
+// `toBody` picks what travels: ids only, never content. The database row holds the rest.
+export const createSqsQueue = <T>(
+	client: SQSClient,
+	queueUrl: string,
+	toBody: (message: T) => unknown,
+): MessageQueue<T> => ({
+	async send(message: T) {
 		await client.send(
-			new SendMessageCommand({
-				QueueUrl: queueUrl,
-				MessageBody: JSON.stringify({ tenantId: ref.tenantId, alertId: ref.alertId }),
-			}),
+			new SendMessageCommand({ QueueUrl: queueUrl, MessageBody: JSON.stringify(toBody(message)) }),
 		);
 	},
 
@@ -33,7 +35,7 @@ export const createSqsAlertQueue = (client: SQSClient, queueUrl: string): AlertQ
 				WaitTimeSeconds: Math.min(Math.max(0, waitSeconds), MAX_WAIT_SECONDS),
 			}),
 		);
-		return Messages.flatMap((message): AlertQueueMessage[] =>
+		return Messages.flatMap((message): QueueMessage[] =>
 			message.MessageId && message.ReceiptHandle
 				? [{ id: message.MessageId, receipt: message.ReceiptHandle, body: message.Body ?? "" }]
 				: [],

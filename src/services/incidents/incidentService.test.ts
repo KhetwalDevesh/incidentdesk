@@ -13,7 +13,7 @@ const principal = (role: Principal["role"]): Principal => ({
 
 describe("incidentService.create", () => {
 	const fixedNow = new Date("2026-01-01T00:00:00.000Z");
-	const service = createIncidentService(new InMemoryIncidentRepository(), () => fixedNow);
+	const service = createIncidentService(new InMemoryIncidentRepository(), { now: () => fixedNow });
 	const input = { title: "Checkout is down", severity: "sev1" } as const;
 
 	it("opens an incident owned by the caller's tenant", async () => {
@@ -38,7 +38,7 @@ describe("incidentService.acknowledge", () => {
 
 	const setup = async () => {
 		const repository = new InMemoryIncidentRepository();
-		const service = createIncidentService(repository, () => fixedNow);
+		const service = createIncidentService(repository, { now: () => fixedNow });
 		const created = await service.create(principal("responder"), input);
 		if (!created.ok) throw new Error("setup failed");
 		return { repository, service, id: created.value.id };
@@ -105,7 +105,7 @@ describe("incidentService.resolve", () => {
 
 	const setup = async () => {
 		const repository = new InMemoryIncidentRepository();
-		const service = createIncidentService(repository, () => fixedNow);
+		const service = createIncidentService(repository, { now: () => fixedNow });
 		const created = await service.create(principal("responder"), input);
 		if (!created.ok) throw new Error("setup failed");
 		return { repository, service, id: created.value.id };
@@ -186,7 +186,7 @@ describe("incidentService.resolve", () => {
 				return repository.update(...args);
 			},
 		};
-		const raced = createIncidentService(racing, () => fixedNow);
+		const raced = createIncidentService(racing, { now: () => fixedNow });
 
 		const result = await raced.resolve(principal("responder"), id);
 

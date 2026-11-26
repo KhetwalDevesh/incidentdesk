@@ -19,6 +19,27 @@ const EnvSchema = DatabaseEnvSchema.extend({
 	// The alert queue. Credentials come from the AWS SDK's default provider chain, never from here.
 	AWS_REGION: z.string().min(1),
 	ALERT_QUEUE_URL: z.url(),
+	// The notification queue: one message per Slack delivery. Spec: docs/features/slack-delivery.md.
+	NOTIFICATION_QUEUE_URL: z.url(),
+	// The only origins the server posts webhooks to, comma-separated. Checked when a channel is
+	// created and before every send, so the server cannot be pointed at an internal address.
+	NOTIFICATION_WEBHOOK_ORIGINS: z
+		.string()
+		.default("https://hooks.slack.com")
+		.transform((value, ctx) => {
+			const origins = value
+				.split(",")
+				.map((origin) => origin.trim())
+				.filter(Boolean);
+			for (const origin of origins) {
+				// An origin, exactly: scheme, host and port, with no path or trailing slash.
+				if (!URL.canParse(origin) || new URL(origin).origin !== origin) {
+					ctx.addIssue({ code: "custom", message: `Not an origin: ${origin}` });
+					return z.NEVER;
+				}
+			}
+			return origins;
+		}),
 	// Set only for a local emulator such as LocalStack.
 	AWS_ENDPOINT_URL: z.url().optional(),
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AlertQueue, AlertQueueMessage, AlertRef } from "../domain/alerts/types";
+import type { MessageQueue, QueueMessage } from "../domain/shared/queue";
 
 type Stored = {
 	id: string;
@@ -9,7 +9,7 @@ type Stored = {
 	receipt: string;
 };
 
-export type InMemoryAlertQueueOptions = {
+export type InMemoryQueueOptions = {
 	now?: () => Date;
 	visibilityTimeoutMs?: number;
 	// Matches the SQS redrive policy: a message received this many times goes to the DLQ.
@@ -19,7 +19,7 @@ export type InMemoryAlertQueueOptions = {
 // Behaves like an SQS standard queue for tests: a received message is hidden for the
 // visibility timeout, only its latest receipt can delete it or change its visibility, and a
 // message received too often moves to a dead-letter list. Delivery order is send order.
-export class InMemoryAlertQueue implements AlertQueue {
+export class InMemoryQueue<T> implements MessageQueue<T> {
 	private readonly messages: Stored[] = [];
 	readonly deadLetters: string[] = [];
 	private readonly now: () => Date;
@@ -32,14 +32,14 @@ export class InMemoryAlertQueue implements AlertQueue {
 		now = () => new Date(),
 		visibilityTimeoutMs = 60_000,
 		maxReceiveCount = 10,
-	}: InMemoryAlertQueueOptions = {}) {
+	}: InMemoryQueueOptions = {}) {
 		this.now = now;
 		this.visibilityTimeoutMs = visibilityTimeoutMs;
 		this.maxReceiveCount = maxReceiveCount;
 	}
 
-	async send(ref: AlertRef): Promise<void> {
-		this.sendRaw(JSON.stringify(ref));
+	async send(message: T): Promise<void> {
+		this.sendRaw(JSON.stringify(message));
 	}
 
 	// Sends any body, so tests can deliver malformed messages.
@@ -54,9 +54,9 @@ export class InMemoryAlertQueue implements AlertQueue {
 		});
 	}
 
-	async receive(max: number, _waitSeconds: number): Promise<AlertQueueMessage[]> {
+	async receive(max: number, _waitSeconds: number): Promise<QueueMessage[]> {
 		const at = this.now().getTime();
-		const received: AlertQueueMessage[] = [];
+		const received: QueueMessage[] = [];
 		for (const message of [...this.messages]) {
 			if (received.length >= max) break;
 			if (message.visibleAt > at) continue;
@@ -73,12 +73,12 @@ export class InMemoryAlertQueue implements AlertQueue {
 		return received;
 	}
 
-	async delete(message: AlertQueueMessage): Promise<void> {
+	async delete(message: QueueMessage): Promise<void> {
 		const stored = this.current(message);
 		if (stored) this.remove(stored);
 	}
 
-	async retryAfter(message: AlertQueueMessage, delayMs: number): Promise<void> {
+	async retryAfter(message: QueueMessage, delayMs: number): Promise<void> {
 		const stored = this.current(message);
 		if (stored) stored.visibleAt = this.now().getTime() + delayMs;
 	}
@@ -88,7 +88,12 @@ export class InMemoryAlertQueue implements AlertQueue {
 		return this.messages.length;
 	}
 
-	private current(message: AlertQueueMessage): Stored | undefined {
+	// The bodies of every message not yet deleted, for tests that check what travels.
+	get bodies(): string[] {
+		return this.messages.map((message) => message.body);
+	}
+
+	private current(message: QueueMessage): Stored | undefined {
 		return this.messages.find(
 			(stored) => stored.id === message.id && stored.receipt === message.receipt,
 		);

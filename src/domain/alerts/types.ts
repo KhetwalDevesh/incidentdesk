@@ -10,7 +10,9 @@ import type { PageQuery } from "../../contract/common";
 import type { IncidentId, IncidentSeverity } from "../../contract/incidents";
 import type { AuditEntry } from "../audit/types";
 import type { Incident } from "../incidents/types";
+import type { DeliveryNotice } from "../notifications/types";
 import type { Principal, TenantId } from "../shared/identity";
+import type { MessageQueue, QueueMessage } from "../shared/queue";
 import type { RequestContext } from "../shared/request";
 import type { Result } from "../shared/result";
 
@@ -60,6 +62,9 @@ export type AlertPage = { items: Alert[]; total: number };
 // What a queue message carries. The alerts row stays the source of truth for everything else.
 export type AlertRef = { tenantId: TenantId; alertId: string };
 
+// The message body for a ref: the two ids and nothing else, even if a caller passes more.
+export const alertQueueBody = ({ tenantId, alertId }: AlertRef) => ({ tenantId, alertId });
+
 // Tenant-scoped. Every method takes tenantId first, like every repository.
 export interface AlertSourceRepository {
 	// Returns null when the tenant already has a source with this name.
@@ -101,6 +106,8 @@ export interface AlertRepository {
 		candidate: Omit<Incident, "tenantId"> | null,
 		processedAt: Date,
 		audit: (outcome: GroupingOutcome) => AuditEntry[],
+		// The Slack deliveries for the outcome, written in the same transaction.
+		notice?: (outcome: GroupingOutcome) => DeliveryNotice | null,
 	): Promise<{ incidentId: IncidentId | null } | null>;
 	// Records a failed attempt. A null retryAt marks the alert failed for good.
 	fail(
@@ -128,19 +135,9 @@ export interface AlertOutbox {
 	): Promise<AlertRef[]>;
 }
 
-// A received message. `body` is untrusted until parsed. `receipt` identifies this delivery.
-export type AlertQueueMessage = { id: string; receipt: string; body: string };
-
-// Delivery is at least once: a message can arrive more than once, in any order.
-export interface AlertQueue {
-	send(ref: AlertRef): Promise<void>;
-	// Waits up to `waitSeconds` for messages. A received message stays hidden from other
-	// receivers for the queue's visibility timeout, then comes back unless deleted.
-	receive(max: number, waitSeconds: number): Promise<AlertQueueMessage[]>;
-	delete(message: AlertQueueMessage): Promise<void>;
-	// Hides the message for `delayMs` from now, so it is redelivered then.
-	retryAfter(message: AlertQueueMessage, delayMs: number): Promise<void>;
-}
+// The alert queue: the shared queue shape, carrying alert refs.
+export type AlertQueueMessage = QueueMessage;
+export type AlertQueue = MessageQueue<AlertRef>;
 
 export interface AlertSignatureVerifier {
 	// Constant-time. False for any malformed signature.
