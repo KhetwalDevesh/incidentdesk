@@ -7,6 +7,8 @@ export const AUDIT_ACTIONS = [
 	"tenant.created",
 	"member.invited",
 	"member.setup_completed",
+	"member.role_changed",
+	"member.removed",
 	"user.login_succeeded",
 	"user.login_failed",
 	"incident.created",

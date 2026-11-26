@@ -13,6 +13,67 @@ export const AddMemberRequestSchema = z
 
 export type AddMemberRequest = z.infer<typeof AddMemberRequestSchema>;
 
+export const MemberIdSchema = z.uuid();
+
+// Spec: docs/features/member-management.md
+export const MAX_MEMBER_BATCH = 50;
+
+export const UpdateMemberRequestSchema = z
+	.strictObject({ role: z.enum(MEMBER_ROLES) })
+	.openapi("UpdateMemberRequest");
+
+export type UpdateMemberRequest = z.infer<typeof UpdateMemberRequestSchema>;
+
+// Adds an issue at each repeat of an id, so a client can find every one.
+const uniqueIds =
+	<T>(idOf: (item: T) => string, path: (index: number) => (string | number)[]) =>
+	(items: T[], ctx: z.RefinementCtx) => {
+		const seen = new Set<string>();
+		items.forEach((item, index) => {
+			const id = idOf(item);
+			if (seen.has(id)) ctx.addIssue({ code: "custom", path: path(index), message: "Repeated id" });
+			seen.add(id);
+		});
+	};
+
+export const BulkUpdateMembersRequestSchema = z
+	.strictObject({
+		changes: z
+			.array(z.strictObject({ id: MemberIdSchema, role: z.enum(MEMBER_ROLES) }))
+			.min(1)
+			.max(MAX_MEMBER_BATCH)
+			.superRefine(
+				uniqueIds(
+					(change) => change.id,
+					(index) => [index, "id"],
+				),
+			),
+	})
+	.openapi("BulkUpdateMembersRequest", {
+		description: "All or nothing: if any change fails, none is applied",
+	});
+
+export type BulkUpdateMembersRequest = z.infer<typeof BulkUpdateMembersRequestSchema>;
+
+export const BulkRemoveMembersRequestSchema = z
+	.strictObject({
+		ids: z
+			.array(MemberIdSchema)
+			.min(1)
+			.max(MAX_MEMBER_BATCH)
+			.superRefine(
+				uniqueIds(
+					(id) => id,
+					(index) => [index],
+				),
+			),
+	})
+	.openapi("BulkRemoveMembersRequest", {
+		description: "All or nothing: if any removal fails, none is applied",
+	});
+
+export type BulkRemoveMembersRequest = z.infer<typeof BulkRemoveMembersRequestSchema>;
+
 const memberFields = {
 	id: z.uuid(),
 	email: z.string(),
@@ -44,3 +105,9 @@ export const MemberListSchema = z
 		offset: z.number().int(),
 	})
 	.openapi("MemberList");
+
+export const MemberBatchSchema = z
+	.strictObject({ items: z.array(MemberSchema) })
+	.openapi("MemberBatch", { description: "The members after the change, in request order" });
+
+export type MemberBatchResponse = z.infer<typeof MemberBatchSchema>;

@@ -19,7 +19,16 @@ import {
 } from "./auth";
 import { PageQuerySchema, ProblemSchema } from "./common";
 import { CreateIncidentRequestSchema, IncidentListSchema, IncidentSchema } from "./incidents";
-import { AddMemberRequestSchema, MemberInviteSchema, MemberListSchema } from "./members";
+import {
+	AddMemberRequestSchema,
+	BulkRemoveMembersRequestSchema,
+	BulkUpdateMembersRequestSchema,
+	MemberBatchSchema,
+	MemberInviteSchema,
+	MemberListSchema,
+	MemberSchema,
+	UpdateMemberRequestSchema,
+} from "./members";
 import {
 	CreateNotificationChannelRequestSchema,
 	NotificationChannelListSchema,
@@ -224,6 +233,77 @@ registry.registerPath({
 		409: problem("Email is already registered"),
 		422: problem("Request body failed validation"),
 	},
+});
+
+const memberParams = z.object({ id: z.uuid() });
+const adminOnly = { 403: problem("Only admins can manage members") };
+
+registry.registerPath({
+	method: "patch",
+	path: "/v1/members/{id}",
+	summary: "Change a member's role",
+	security,
+	request: {
+		params: memberParams,
+		body: { content: { "application/json": { schema: UpdateMemberRequestSchema } } },
+	},
+	responses: {
+		200: json(MemberSchema, "The member with the new role"),
+		...authErrors,
+		...adminOnly,
+		404: problem("No such member in this tenant"),
+		409: problem("The caller's own role, or the tenant would have no active admin"),
+		422: problem("Id or body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "delete",
+	path: "/v1/members/{id}",
+	summary: "Remove a member, or cancel a pending invite",
+	description: "The member is deleted. The same email can be invited again, as a new member.",
+	security,
+	request: { params: memberParams },
+	responses: {
+		204: { description: "Member removed" },
+		...authErrors,
+		...adminOnly,
+		404: problem("No such member in this tenant"),
+		409: problem("The caller themselves, or the tenant would have no active admin"),
+		422: problem("Id failed validation"),
+	},
+});
+
+const bulkErrors = {
+	...authErrors,
+	...adminOnly,
+	404: problem("An id is not a member of this tenant. `errors` lists each one"),
+	409: problem(
+		"The caller is in the list, or the tenant would have no active admin. `errors` lists each item",
+	),
+	422: problem("Body failed validation, including a repeated id or more than 50 items"),
+};
+
+registry.registerPath({
+	method: "patch",
+	path: "/v1/members",
+	summary: "Change several members' roles at once, all or nothing",
+	security,
+	request: {
+		body: { content: { "application/json": { schema: BulkUpdateMembersRequestSchema } } },
+	},
+	responses: { 200: json(MemberBatchSchema, "Every change applied"), ...bulkErrors },
+});
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/members/remove",
+	summary: "Remove several members at once, all or nothing",
+	security,
+	request: {
+		body: { content: { "application/json": { schema: BulkRemoveMembersRequestSchema } } },
+	},
+	responses: { 204: { description: "Every member removed" }, ...bulkErrors },
 });
 
 registry.registerPath({

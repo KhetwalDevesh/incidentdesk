@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { LoginRequest, SetupPasswordRequest, SignupRequest } from "../../contract/auth";
 import type { PageQuery } from "../../contract/common";
-import type { AddMemberRequest } from "../../contract/members";
+import type { AddMemberRequest, BulkUpdateMembersRequest } from "../../contract/members";
 import type { AuditEntry } from "../audit/types";
 import type { Principal, Role, TenantId } from "../shared/identity";
 import type { RequestContext } from "../shared/request";
@@ -23,6 +23,30 @@ export type UserPage = { items: User[]; total: number };
 
 export type NewSetupToken = { tokenHash: string; expiresAt: Date };
 
+// An active admin can sign in. A pending one cannot until they set a password.
+export const isActiveAdmin = (user: User) => user.role === "admin" && user.passwordHash !== null;
+
+export const memberStatus = (user: User) => (user.passwordHash === null ? "pending" : "active");
+
+export type RoleChange = { userId: string; role: Role };
+
+// Whether a batch keeps at least one active admin. `after` maps each user in the batch to
+// what it becomes, or null when removed. `activeAdmins` are the tenant's active admins now.
+export const keepsActiveAdmin = (activeAdmins: User[], after: Map<string, User | null>) =>
+	activeAdmins.some((admin) => !after.has(admin.id)) ||
+	[...after.values()].some((user) => user !== null && isActiveAdmin(user));
+
+// Why a batch of member changes was refused. Nothing was changed.
+export type MemberChangeRejection =
+	// Indexes into the request of every id that is not a member of the tenant.
+	| { reason: "not_found"; indexes: number[] }
+	// Applying the batch would leave the tenant with no active admin.
+	| { reason: "last_admin" };
+
+export type MemberChangeOutcome =
+	| { applied: true; users: User[] }
+	| { applied: false; rejection: MemberChangeRejection };
+
 // Setup tokens are stored only as this hash, so a database leak does not hand out logins.
 export const hashSetupToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
@@ -38,6 +62,22 @@ export interface AccountRepository {
 		// Written only when the user is added.
 		audit: AuditEntry,
 	): Promise<boolean>;
+	// All or nothing, in one transaction that locks the tenant's active admins first, so
+	// concurrent batches cannot leave the tenant without one. `users` are the members after
+	// the change, in request order. `audit` builds an entry for each member whose role
+	// actually changed; a member given their current role writes none.
+	changeRoles(
+		tenantId: TenantId,
+		changes: RoleChange[],
+		audit: (before: User, after: User) => AuditEntry,
+	): Promise<MemberChangeOutcome>;
+	// All or nothing, under the same lock. Deletes the users and their setup tokens.
+	// `users` are the members as they were, in request order.
+	removeUsers(
+		tenantId: TenantId,
+		userIds: string[],
+		audit: (removed: User) => AuditEntry,
+	): Promise<MemberChangeOutcome>;
 }
 
 // The only operations that run before the tenant is known. Audit every caller.
@@ -93,4 +133,21 @@ export interface MemberService {
 		input: AddMemberRequest,
 		context?: RequestContext,
 	): Promise<Result<MemberInvite>>;
+	changeRole(
+		principal: Principal,
+		userId: string,
+		role: Role,
+		context?: RequestContext,
+	): Promise<Result<User>>;
+	changeRoles(
+		principal: Principal,
+		changes: BulkUpdateMembersRequest["changes"],
+		context?: RequestContext,
+	): Promise<Result<User[]>>;
+	remove(principal: Principal, userId: string, context?: RequestContext): Promise<Result<void>>;
+	removeMany(
+		principal: Principal,
+		userIds: string[],
+		context?: RequestContext,
+	): Promise<Result<void>>;
 }

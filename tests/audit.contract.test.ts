@@ -303,4 +303,55 @@ describe("audit log contract", () => {
 			expect(malformed.status).toBe(422);
 		});
 	});
+
+	describe("member management", () => {
+		it("records role changes with from and to, removals with role and status, and no-ops not at all", async () => {
+			const owner = await signup(system.app, "owner@initech.example", "Initech");
+			const invite = async (email: string, role: string) =>
+				MemberInviteSchema.parse(
+					await (await system.app.request("/v1/members", authed(owner, { email, role }))).json(),
+				);
+			const milton = await invite("milton@initech.example", "viewer");
+			const peter = await invite("peter@initech.example", "responder");
+			const patch = (path: string, body: unknown) =>
+				system.app.request(path, { ...authed(owner, body), method: "PATCH" });
+
+			await patch(`/v1/members/${milton.id}`, { role: "responder" });
+			await patch(`/v1/members/${milton.id}`, { role: "responder" });
+			await patch("/v1/members", {
+				changes: [
+					{ id: milton.id, role: "admin" },
+					{ id: peter.id, role: "responder" },
+				],
+			});
+			await system.app.request("/v1/members/remove", {
+				...authed(owner, { ids: [peter.id] }),
+				method: "POST",
+			});
+
+			const changes = (await events(owner, "?resourceType=user&limit=100"))
+				.filter(
+					(event) => event.action === "member.role_changed" || event.action === "member.removed",
+				)
+				.reverse();
+			expect(changes).toMatchObject([
+				{
+					action: "member.role_changed",
+					resource: { type: "user", id: milton.id },
+					details: { from: "viewer", to: "responder" },
+				},
+				{
+					action: "member.role_changed",
+					resource: { type: "user", id: milton.id },
+					details: { from: "responder", to: "admin" },
+				},
+				{
+					action: "member.removed",
+					resource: { type: "user", id: peter.id },
+					details: { role: "responder", status: "pending" },
+				},
+			]);
+			expect(JSON.stringify(changes)).not.toContain("@initech.example");
+		});
+	});
 });

@@ -1,6 +1,6 @@
 # Member management
 
-Status: Approved
+Status: Done
 
 Phase 2, finishing "tenants, roles": an admin changes members' roles and removes members, one at a time or in bulk. Both were out of scope in `docs/features/real-authentication.md`.
 
@@ -54,7 +54,8 @@ Additive only.
 | POST | `/v1/members/remove` with `{ ids: [] }` (1 to 50) | 204, no body | 401, 403, 404, 409, 422, as above |
 
 - `UpdateMemberRequest` is strict: `{ role: "viewer" | "responder" | "admin" }`. `BulkUpdateMembersRequest` is `{ changes: [{ id, role }] }`, and `BulkRemoveMembersRequest` is `{ ids: [id] }`. Both are strict, with 1 to 50 unique ids.
-- A failed bulk request returns a problem whose `errors` list names every failing item by its position, for example `{ "path": "changes.2.id", "message": "Member not found" }`. A 404 is returned if any id is unknown; otherwise a 409 if any item breaks a guard.
+- A failed bulk request returns a problem whose `errors` list names every failing item by its position, for example `{ "path": "changes.2.id", "message": "Member not found" }`. Checks run in this order: a 409 if the caller is in the list, which needs no lookup; then a 404 if any id is unknown; then a 409 if no active admin would remain.
+- The caller is always an active admin and can never be in their own request, so one request alone cannot remove the last admin. The guard matters when two admins act on each other at the same time. The loser then gets 409, or 401 if they were already removed.
 - The last-admin rule is checked on the result of the whole request, not item by item. Demoting one admin while promoting another in the same request is allowed.
 - `POST /v1/members/remove` is used instead of `DELETE` with a body, which many clients and proxies drop.
 - Setting the role a member already has returns 200 with the member unchanged, and writes no audit event.
@@ -110,13 +111,13 @@ Code:
 
 ## Done when
 
-- [ ] An admin changes a pending or active member's role, and setting the current role is a no-op (`tests/members.contract.test.ts`)
-- [ ] An admin removes an active member, whose old token then gets 401, and a pending member, whose setup token then gets 401 (`tests/members.contract.test.ts`)
-- [ ] A removed email can be invited again, as a new user (`tests/members.contract.test.ts`)
-- [ ] Bulk role changes and bulk removals apply every item, or none. A failure lists every failing item. A repeated id or more than 50 items gets 422 (`tests/members.contract.test.ts`, `tests/accountRepository.parity.test.ts`)
-- [ ] A bulk request may demote one admin while promoting another, but not leave the tenant without an active admin (`tests/members.contract.test.ts`)
-- [ ] Self-changes and removing or demoting the last active admin get 409, and concurrent cross-demotion leaves exactly one admin (`tests/members.contract.test.ts`, `tests/accountRepository.parity.test.ts`)
-- [ ] Viewers and responders get 403 on all four routes. Another tenant's member gets 404, alone or inside a bulk request (`tests/security.test.ts`, "member management")
-- [ ] Each change writes one `member.role_changed { from, to }` or `member.removed { role, status }` event in its transaction, and a no-op writes none (`tests/audit.contract.test.ts`)
-- [ ] Contract regenerated, additive only (no removed lines in `contracts/openapi.yaml`)
-- [ ] `pnpm check` passes
+- [x] An admin changes a pending or active member's role, and setting the current role is a no-op (`tests/members.contract.test.ts`)
+- [x] An admin removes an active member, whose old token then gets 401, and a pending member, whose setup token then gets 401 (`tests/members.contract.test.ts`)
+- [x] A removed email can be invited again, as a new user (`tests/members.contract.test.ts`)
+- [x] Bulk role changes and bulk removals apply every item, or none. A failure lists every failing item. A repeated id or more than 50 items gets 422 (`tests/members.contract.test.ts`, `tests/accountRepository.parity.test.ts`)
+- [x] A bulk request may demote one admin while promoting another, but not leave the tenant without an active admin (`tests/members.contract.test.ts`)
+- [x] Self-changes and removing or demoting the last active admin get 409, and concurrent cross-demotion leaves exactly one admin (`tests/members.contract.test.ts`, `tests/accountRepository.parity.test.ts`)
+- [x] Viewers and responders get 403 on all four routes. Another tenant's member gets 404, alone or inside a bulk request (`tests/security.test.ts`, "member management")
+- [x] Each change writes one `member.role_changed { from, to }` or `member.removed { role, status }` event in its transaction, and a no-op writes none (`tests/audit.contract.test.ts`)
+- [x] Contract regenerated, additive only (no removed lines in `contracts/openapi.yaml`)
+- [x] `pnpm check` passes (371 tests). A manual run against the dev database showed the role change, the bulk refusal listing the unknown id, invite cancellation, removal ending the token, re-invite as a new id, and two admins removing each other at once giving 204 and 409 over real Postgres connections
