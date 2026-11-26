@@ -18,6 +18,7 @@ import { PostgresAccountRepository } from "../repository/accounts/postgresAccoun
 import { PostgresAlertRepository } from "../repository/alerts/postgresAlertRepository";
 import { PostgresAlertSourceRepository } from "../repository/alerts/postgresAlertSourceRepository";
 import { PostgresAuditRepository } from "../repository/audit/postgresAuditRepository";
+import { PostgresIncidentStatsReader } from "../repository/dashboard/postgresIncidentStatsReader";
 import { PostgresIncidentRepository } from "../repository/incidents/postgresIncidentRepository";
 import { PostgresNotificationChannelRepository } from "../repository/notifications/postgresNotificationChannelRepository";
 import { PostgresNotificationDeliveryRepository } from "../repository/notifications/postgresNotificationDeliveryRepository";
@@ -29,6 +30,7 @@ import { createAlertSourceService } from "../services/alerts/alertSourceService"
 import { createAuditPurge } from "../services/audit/auditPurge";
 import { createAuditService } from "../services/audit/auditService";
 import { createAuthService } from "../services/auth/authService";
+import { createDashboardService } from "../services/dashboard/dashboardService";
 import { createIncidentService } from "../services/incidents/incidentService";
 import { createMemberService } from "../services/members/memberService";
 import { createDeliveryDispatcher } from "../services/notifications/deliveryDispatcher";
@@ -107,6 +109,10 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 		}),
 		auditService: createAuditService(audit, incidents),
 		onCallScheduleService: createOnCallScheduleService(schedules),
+		dashboardService: createDashboardService({
+			stats: new PostgresIncidentStatsReader(pool),
+			members: accounts,
+		}),
 	});
 	return { app, pool };
 };

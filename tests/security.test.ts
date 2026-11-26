@@ -10,6 +10,7 @@ import {
 import { AuditEventListSchema } from "../src/contract/audit";
 import { AccessTokenSchema } from "../src/contract/auth";
 import { ProblemSchema } from "../src/contract/common";
+import { DashboardSchema } from "../src/contract/dashboard";
 import { IncidentListSchema, IncidentSchema } from "../src/contract/incidents";
 import { MemberInviteSchema, MemberListSchema } from "../src/contract/members";
 import {
@@ -1016,5 +1017,47 @@ describe("on-call", () => {
 			["incident.acknowledged", alan.id],
 		]);
 		expect(JSON.stringify(timeline)).not.toMatch(/@acme\.example/);
+	});
+});
+
+// Spec: docs/features/dashboard-stats.md
+describe("dashboard", () => {
+	it("never counts or names another tenant's incidents or assignees", async () => {
+		const app = buildTestApp();
+		const acme = await signup(app, "ada@acme.example", "Acme");
+		const globex = await signup(app, "hank@globex.example", "Globex");
+		const invited = await app.request(
+			"/v1/members",
+			authed(globex, { email: "frank@globex.example", role: "responder" }),
+		);
+		const frank = MemberInviteSchema.parse(await invited.json());
+		for (const severity of ["sev1", "sev2"]) {
+			const res = await app.request("/v1/incidents", authed(globex, { ...validBody, severity }));
+			const { id } = IncidentSchema.parse(await res.json());
+			await app.request(`/v1/incidents/${id}/assign`, authed(globex, { assigneeId: frank.id }));
+		}
+		await app.request("/v1/incidents", authed(acme, validBody));
+
+		const acmeView = DashboardSchema.parse(
+			await (await app.request("/v1/dashboard", authed(acme))).json(),
+		);
+		const globexView = DashboardSchema.parse(
+			await (await app.request("/v1/dashboard", authed(globex))).json(),
+		);
+
+		expect(acmeView.totals).toEqual({ open: 1, acknowledged: 0, unassigned: 1 });
+		expect(acmeView.load).toEqual([]);
+		expect(JSON.stringify(acmeView)).not.toContain("globex");
+		expect(globexView.totals).toEqual({ open: 2, acknowledged: 0, unassigned: 0 });
+		expect(globexView.load.map((row) => row.email)).toEqual(["frank@globex.example"]);
+	});
+
+	it("ignores a tenant smuggled in the query", async () => {
+		const app = buildTestApp();
+		await app.request("/v1/incidents", authed("globex-responder", validBody));
+
+		const res = await app.request("/v1/dashboard?tenantId=tenant-globex", authed("acme-responder"));
+
+		expect(DashboardSchema.parse(await res.json()).totals.open).toBe(0);
 	});
 });

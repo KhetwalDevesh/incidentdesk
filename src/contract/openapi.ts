@@ -21,6 +21,7 @@ import {
 	SignupRequestSchema,
 } from "./auth";
 import { PageQuerySchema, ProblemSchema } from "./common";
+import { DashboardQuerySchema, DashboardSchema } from "./dashboard";
 import {
 	AssignIncidentRequestSchema,
 	CreateIncidentRequestSchema,
@@ -445,6 +446,23 @@ registry.registerPath({
 		403: problem("Only admins can change alert sources"),
 		404: problem("No such alert source or schedule in this tenant"),
 		422: problem("Id or body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/dashboard",
+	summary: "Live counts of unresolved incidents, and who holds them",
+	description:
+		"Every member may read it. With from and to, every number counts only unresolved incidents opened in that range. Spec: docs/features/dashboard-stats.md.",
+	security,
+	request: { query: DashboardQuerySchema },
+	responses: {
+		200: json(DashboardSchema, "The dashboard"),
+		...authErrors,
+		422: problem(
+			"Query failed validation: give both from and to, from before to, at most 90 days apart",
+		),
 	},
 });
 

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { AlertIngestService, AlertService, AlertSourceService } from "../domain/alerts/types";
 import type { AuditService } from "../domain/audit/types";
 import type { AuthService, MemberService } from "../domain/auth/types";
+import type { DashboardService } from "../domain/dashboard/types";
 import type { IncidentService } from "../domain/incidents/types";
 import type { NotificationChannelService } from "../domain/notifications/types";
 import type { OnCallScheduleService } from "../domain/onCall/types";
@@ -11,6 +12,7 @@ import { alertRoutes } from "../routes/alerts";
 import { alertWebhookRoutes } from "../routes/alertWebhooks";
 import { auditRoutes } from "../routes/audit";
 import { authRoutes } from "../routes/auth";
+import { dashboardRoutes } from "../routes/dashboard";
 import { healthRoutes } from "../routes/health";
 import { incidentRoutes } from "../routes/incidents";
 import { memberRoutes } from "../routes/members";
@@ -34,6 +36,7 @@ export type AppDeps = {
 	alertIngestService: AlertIngestService;
 	auditService: AuditService;
 	onCallScheduleService: OnCallScheduleService;
+	dashboardService: DashboardService;
 };
 
 export const createApp = ({
@@ -47,6 +50,7 @@ export const createApp = ({
 	alertIngestService,
 	auditService,
 	onCallScheduleService,
+	dashboardService,
 }: AppDeps) => {
 	const app = new Hono<AppEnv>();
 
@@ -77,6 +81,7 @@ export const createApp = ({
 	app.route("/v1/alert-sources", alertSourceRoutes(alertSourceService));
 	app.route("/v1/alerts", alertRoutes(alertService));
 	app.route("/v1/on-call-schedules", onCallScheduleRoutes(onCallScheduleService));
+	app.route("/v1/dashboard", dashboardRoutes(dashboardService));
 	// /v1/audit-events and /v1/incidents/{id}/events.
 	app.route("/v1", auditRoutes(auditService));
 
