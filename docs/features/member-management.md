@@ -2,7 +2,7 @@
 
 Status: Approved
 
-Phase 2, finishing "tenants, roles": an admin changes a member's role and removes a member. Both were out of scope in `docs/features/real-authentication.md`.
+Phase 2, finishing "tenants, roles": an admin changes members' roles and removes members, one at a time or in bulk. Both were out of scope in `docs/features/real-authentication.md`.
 
 Decided by the user:
 
@@ -12,9 +12,10 @@ Decided by the user:
 | Last admin | Refused: a tenant always keeps at least one active admin |
 | Self-changes | Refused: an admin cannot change their own role or remove themselves. Another admin must do it |
 | Pending members | Removable. Removing one cancels the invite, so its unused setup token stops working |
-| Removed members | Can be invited again with the same email |
+| Restoring a removed member | Invite the same email again. They get a new user id, so their old incidents and audit events keep showing the old id. There is no restore endpoint |
+| Bulk changes | In scope, all or nothing: up to 50 role changes, or up to 50 removals, in one request and one transaction. If any item fails, nothing changes, and the response lists every failing item |
 | Who may do it | Admins only |
-| Out of scope | Ownership transfer (an owner role above admin), a token revocation list, bulk changes, and restoring a removed member (invite them again instead) |
+| Out of scope | Ownership transfer (an owner role above admin), and a token revocation list |
 | Who counts as the one admin | Only an active admin, one who has set a password. A pending admin cannot sign in |
 | Setting the current role | 200 with no change and no audit event |
 | New audit actions | `member.role_changed` and `member.removed` are added to the response enum now, since nothing reads the audit log yet |
@@ -28,8 +29,9 @@ Let an admin keep a team's access correct as people change jobs or leave: promot
 
 1. An admin changes a member's role with `PATCH /v1/members/{id}` and `{ "role": "responder" }`. The member's next request uses the new role, because every request reloads the user.
 2. An admin removes a member with `DELETE /v1/members/{id}`. The user row and any setup token are deleted. The member's next request with their old token gets 401, and an unused setup token gets 401 at `/v1/auth/setup-password`.
-3. The admin can invite the same email again with `POST /v1/members`.
-4. Each change writes an audit event in the same transaction: `member.role_changed` or `member.removed`.
+3. An admin changes many roles at once with `PATCH /v1/members` and `{ "changes": [{ "id", "role" }, ...] }`, or removes many members with `POST /v1/members/remove` and `{ "ids": [...] }`. Either every item applies, or none does.
+4. To restore a removed member, the admin invites the same email again with `POST /v1/members`. This creates a new user with a new id.
+5. Each change writes one audit event per member, in the same transaction: `member.role_changed` or `member.removed`.
 
 ## Permissions
 
@@ -48,8 +50,13 @@ Additive only.
 |---|---|---|---|
 | PATCH | `/v1/members/{id}` with `{ role }` | 200 `Member` | 401, 403 (not an admin), 404 (unknown member, or another tenant's), 409 (own role, or the last active admin), 422 (malformed id or body) |
 | DELETE | `/v1/members/{id}` | 204, no body | 401, 403, 404, 409 (themselves, or the last active admin), 422 (malformed id) |
+| PATCH | `/v1/members` with `{ changes: [{ id, role }] }` (1 to 50) | 200 `{ items: Member[] }`, in request order | 401, 403, 404 (any unknown id), 409 (the caller is in the list, or the result leaves no active admin), 422 (malformed body, or a repeated id) |
+| POST | `/v1/members/remove` with `{ ids: [] }` (1 to 50) | 204, no body | 401, 403, 404, 409, 422, as above |
 
-- `UpdateMemberRequest` is strict: `{ role: "viewer" | "responder" | "admin" }`.
+- `UpdateMemberRequest` is strict: `{ role: "viewer" | "responder" | "admin" }`. `BulkUpdateMembersRequest` is `{ changes: [{ id, role }] }`, and `BulkRemoveMembersRequest` is `{ ids: [id] }`. Both are strict, with 1 to 50 unique ids.
+- A failed bulk request returns a problem whose `errors` list names every failing item by its position, for example `{ "path": "changes.2.id", "message": "Member not found" }`. A 404 is returned if any id is unknown; otherwise a 409 if any item breaks a guard.
+- The last-admin rule is checked on the result of the whole request, not item by item. Demoting one admin while promoting another in the same request is allowed.
+- `POST /v1/members/remove` is used instead of `DELETE` with a body, which many clients and proxies drop.
 - Setting the role a member already has returns 200 with the member unchanged, and writes no audit event.
 - `AuditEvent.action` gains `member.role_changed` and `member.removed`. Nothing reads the audit log yet (the dashboard is Phase 4), so adding them now breaks no client. From here on, clients must show an action they do not know as plain text.
 
@@ -63,10 +70,10 @@ No new table and no new column.
 
 Code:
 
-- `AccountRepository.changeRole(tenantId, userId, role, audit)` and `AccountRepository.removeUser(tenantId, userId, audit)`. Each returns its outcome: `changed`, `unchanged` (role only), `removed`, `not_found` or `last_admin`. Each runs in one transaction that first locks the tenant's active admins (`FOR UPDATE`), so two admins demoting or removing each other at the same time cannot leave the tenant with none. The in-memory twin checks and writes with no `await` in between.
+- `AccountRepository.changeRoles(tenantId, changes, audit)` and `AccountRepository.removeUsers(tenantId, ids, audit)` take 1 to 50 items; the single-member routes call them with one. Each returns `applied` (with the members after the change) or `rejected` (with the unknown ids, or the last-admin violation). Each runs in one transaction that first locks the tenant's active admins (`FOR UPDATE`), so two admins demoting or removing each other at the same time cannot leave the tenant with none. The in-memory twin checks and writes with no `await` in between.
 - `audit` builds the entry from the member as found. Its details are `member.role_changed { from, to }` and `member.removed { role, status }`.
-- The member service checks that the caller is an admin and is not changing themselves, then maps the outcome to a result.
-- Contract `UpdateMemberRequestSchema`, two routes in `src/routes/members.ts`, registered in `openapi.ts`.
+- The member service checks that the caller is an admin and is not in the list, then maps the outcome to a result.
+- Contract `UpdateMemberRequestSchema`, `BulkUpdateMembersRequestSchema`, `BulkRemoveMembersRequestSchema` and `MemberBatchSchema`, four routes in `src/routes/members.ts`, registered in `openapi.ts`.
 
 ## Edge cases and failures
 
@@ -78,13 +85,17 @@ Code:
 - A removed pending member's setup token is used: 401 "Setup token is invalid, used or expired", the same answer as for any bad token.
 - The removed email is invited again: a new user with a new id. Their old incidents and audit events keep the old id.
 - Removing a member who does not exist, or who belongs to another tenant: 404.
-- Setting the current role: 200, no change, no audit event.
+- Setting the current role: 200, no change, no audit event. In a bulk request, those items are returned unchanged and write no event.
+- A bulk request with one bad item among many valid ones: nothing changes. The response lists every bad item, not just the first.
+- A bulk request repeats an id: 422 before anything is looked up.
+- A bulk request contains another tenant's member id: 404 for that item, the same as an unknown id, so its existence is not revealed.
 
 ## Security
 
 - **Tenant boundary:** `tenantId` comes from the principal, and repository methods take it first. Another tenant's member returns 404, not 403. Isolation tests cover both routes.
 - **Authorization:** admin only, checked in the service. The self-change and last-admin guards hold even when an admin's client misbehaves.
 - **Race safety:** the last-admin rule is enforced inside the transaction under a row lock, not by a check before it.
+- **Bulk limits:** at most 50 items per request, so one call cannot hold the admin locks for long or produce an unbounded audit write.
 - **Audit details:** only the role and status, never the email. Hard delete also removes the email from the `users` table.
 - **Access ends:** every request reloads the user, so a removed member loses access on their next request without a token blocklist.
 
@@ -92,7 +103,7 @@ Code:
 
 - Ownership transfer, or an owner role above admin
 - A token revocation list. It is not needed, because every request reloads the user
-- Bulk changes, and restoring a removed member (they are invited again instead)
+- A restore endpoint. A removed member is invited again instead
 - Sending invite emails, and password reset: a separate feature
 - Changing a member's email
 - Members leaving a tenant by themselves
@@ -101,9 +112,11 @@ Code:
 
 - [ ] An admin changes a pending or active member's role, and setting the current role is a no-op (`tests/members.contract.test.ts`)
 - [ ] An admin removes an active member, whose old token then gets 401, and a pending member, whose setup token then gets 401 (`tests/members.contract.test.ts`)
-- [ ] A removed email can be invited again (`tests/members.contract.test.ts`)
+- [ ] A removed email can be invited again, as a new user (`tests/members.contract.test.ts`)
+- [ ] Bulk role changes and bulk removals apply every item, or none. A failure lists every failing item. A repeated id or more than 50 items gets 422 (`tests/members.contract.test.ts`, `tests/accountRepository.parity.test.ts`)
+- [ ] A bulk request may demote one admin while promoting another, but not leave the tenant without an active admin (`tests/members.contract.test.ts`)
 - [ ] Self-changes and removing or demoting the last active admin get 409, and concurrent cross-demotion leaves exactly one admin (`tests/members.contract.test.ts`, `tests/accountRepository.parity.test.ts`)
-- [ ] Viewers and responders get 403. Another tenant's member gets 404 (`tests/security.test.ts`, "member management")
+- [ ] Viewers and responders get 403 on all four routes. Another tenant's member gets 404, alone or inside a bulk request (`tests/security.test.ts`, "member management")
 - [ ] Each change writes one `member.role_changed { from, to }` or `member.removed { role, status }` event in its transaction, and a no-op writes none (`tests/audit.contract.test.ts`)
 - [ ] Contract regenerated, additive only (no removed lines in `contracts/openapi.yaml`)
 - [ ] `pnpm check` passes
