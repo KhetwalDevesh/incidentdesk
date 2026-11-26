@@ -21,6 +21,8 @@ export const memberRoutes = (service: MemberService) =>
 			const parsed = AddMemberRequestSchema.safeParse(await c.req.json().catch(() => null));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.add(c.get("principal"), parsed.data);
+			const result = await service.add(c.get("principal"), parsed.data, {
+				requestId: c.get("requestId"),
+			});
 			return respond(c, result, (invite) => c.json(toMemberInviteResponse(invite), 201));
 		});

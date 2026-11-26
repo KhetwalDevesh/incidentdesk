@@ -1,6 +1,6 @@
 # Audit log
 
-Status: Approved
+Status: Done
 
 Records every change in a tenant, and every sign-in, as an append-only event. Product spec, core flow step 6: "Every action is written to an audit log."
 
@@ -140,14 +140,14 @@ Code:
 
 ## Done when
 
-- [ ] Each action in the events table writes exactly one event with the documented actor, resource and `details`, in the same transaction as the change (`tests/audit.contract.test.ts`, `tests/auditRepository.parity.test.ts`)
-- [ ] A failing audit insert rolls back the change (`tests/auditRepository.parity.test.ts`)
-- [ ] The compare-and-set loser and a duplicate alert message write no event (`tests/audit.contract.test.ts`)
-- [ ] Sign-ins are recorded for known emails only, and never delay or fail the login response (`src/services/auth/authService.test.ts`)
-- [ ] `GET /v1/audit-events` lists newest first, filters by action, resource, actor and time range, paginates, and rejects bad filters with 422. All three roles can read it (`tests/audit.contract.test.ts`)
-- [ ] `GET /v1/incidents/{id}/events` returns the timeline oldest first, and 404 for another tenant's incident (`tests/audit.contract.test.ts`, `tests/security.test.ts`)
-- [ ] No response contains a password, token, secret, secret hint, webhook URL or a failed login's email (`tests/security.test.ts`)
-- [ ] The trigger rejects `UPDATE`, and `DELETE` of rows younger than 90 days. The purge deletes only older rows (`tests/auditRepository.parity.test.ts`)
-- [ ] Contract regenerated, additive only (no removed lines in `contracts/openapi.yaml`)
-- [ ] Tenant isolation tests for both routes and the purge (`tests/security.test.ts`, "audit log")
-- [ ] `pnpm check` passes
+- [x] Each action in the events table writes exactly one event with the documented actor, resource and `details`, in the same transaction as the change (`tests/audit.contract.test.ts`, `tests/auditRepository.parity.test.ts`)
+- [x] A failing audit insert rolls back the change (`tests/auditRepository.parity.test.ts`)
+- [x] The compare-and-set loser and a duplicate alert message write no event (`tests/audit.contract.test.ts`)
+- [x] Sign-ins are recorded for known emails only, and never delay or fail the login response (`src/services/auth/authService.test.ts`)
+- [x] `GET /v1/audit-events` lists newest first, filters by action, resource, actor and time range, paginates, and rejects bad filters with 422. All three roles can read it (`tests/audit.contract.test.ts`)
+- [x] `GET /v1/incidents/{id}/events` returns the timeline oldest first, and 404 for another tenant's incident (`tests/audit.contract.test.ts`, `tests/security.test.ts`)
+- [x] No response contains a password, token, secret, secret hint, webhook URL or a failed login's email (`tests/security.test.ts`)
+- [x] The trigger rejects `UPDATE`, and `DELETE` of rows younger than 90 days. The purge deletes only older rows (`tests/auditRepository.parity.test.ts`)
+- [x] Contract regenerated, additive only (no removed lines in `contracts/openapi.yaml`)
+- [x] Tenant isolation tests for both routes and the purge (`tests/security.test.ts`, "audit log")
+- [x] `pnpm check` passes (337 tests). A manual run against the dev database recorded signup, create, acknowledge (one of two racing requests), resolve and both sign-ins, with no email or password in the log, and the trigger refused a direct `UPDATE`

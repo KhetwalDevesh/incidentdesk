@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import type { PageQuery } from "../../contract/common";
 import type { IncidentId } from "../../contract/incidents";
+import type { AuditEntry } from "../../domain/audit/types";
 import type {
 	Incident,
 	IncidentChanges,
@@ -8,6 +9,7 @@ import type {
 	IncidentRepository,
 } from "../../domain/incidents/types";
 import type { TenantId } from "../../domain/shared/identity";
+import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
 
 export const INCIDENT_COLUMNS =
 	"id, tenant_id, title, severity, status, created_at, created_by, acknowledged_at, acknowledged_by, resolved_at, resolved_by, alert_source_id, dedup_key, alert_count, last_alert_at";
@@ -61,28 +63,35 @@ const CHANGE_KEYS = Object.keys(CHANGE_COLUMNS) as (keyof IncidentChanges)[];
 export class PostgresIncidentRepository implements IncidentRepository {
 	constructor(private readonly pool: Pool) {}
 
-	async create(tenantId: TenantId, incident: Omit<Incident, "tenantId">): Promise<Incident> {
-		const { rows } = await this.pool.query<IncidentRow>(
-			`INSERT INTO incidents (${INCIDENT_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING ${INCIDENT_COLUMNS}`,
-			[
-				incident.id,
-				tenantId,
-				incident.title,
-				incident.severity,
-				incident.status,
-				incident.createdAt,
-				incident.createdBy,
-				incident.acknowledgedAt,
-				incident.acknowledgedBy,
-				incident.resolvedAt,
-				incident.resolvedBy,
-				incident.alertSourceId,
-				incident.dedupKey,
-				incident.alertCount,
-				incident.lastAlertAt,
-			],
-		);
-		return toIncident(rows[0] as IncidentRow);
+	async create(
+		tenantId: TenantId,
+		incident: Omit<Incident, "tenantId">,
+		audit: AuditEntry,
+	): Promise<Incident> {
+		return inTransaction(this.pool, async (client) => {
+			const { rows } = await client.query<IncidentRow>(
+				`INSERT INTO incidents (${INCIDENT_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING ${INCIDENT_COLUMNS}`,
+				[
+					incident.id,
+					tenantId,
+					incident.title,
+					incident.severity,
+					incident.status,
+					incident.createdAt,
+					incident.createdBy,
+					incident.acknowledgedAt,
+					incident.acknowledgedBy,
+					incident.resolvedAt,
+					incident.resolvedBy,
+					incident.alertSourceId,
+					incident.dedupKey,
+					incident.alertCount,
+					incident.lastAlertAt,
+				],
+			);
+			await insertAuditEntries(client, [audit]);
+			return toIncident(rows[0] as IncidentRow);
+		});
 	}
 
 	async findById(tenantId: TenantId, id: IncidentId): Promise<Incident | null> {
@@ -107,20 +116,26 @@ export class PostgresIncidentRepository implements IncidentRepository {
 		return { items: page.rows.map(toIncident), total: Number(count.rows[0]?.total ?? 0) };
 	}
 
-	// One statement, so the status check and the write cannot interleave with another request.
+	// One statement checks the status and writes, so it cannot interleave with another request.
+	// The audit entry joins the same transaction, and only when the update applied.
 	async update(
 		tenantId: TenantId,
 		id: IncidentId,
 		expectedStatus: Incident["status"],
 		changes: IncidentChanges,
+		audit: AuditEntry,
 	): Promise<Incident | null> {
 		const keys = CHANGE_KEYS.filter((key) => changes[key] !== undefined);
 		const assignments = keys.map((key, index) => `${CHANGE_COLUMNS[key]} = $${index + 4}`);
-		const { rows } = await this.pool.query<IncidentRow>(
-			`UPDATE incidents SET ${assignments.join(", ") || "status = status"}
+		return inTransaction(this.pool, async (client) => {
+			const { rows } = await client.query<IncidentRow>(
+				`UPDATE incidents SET ${assignments.join(", ") || "status = status"}
 			 WHERE tenant_id = $1 AND id = $2 AND status = $3 RETURNING ${INCIDENT_COLUMNS}`,
-			[tenantId, id, expectedStatus, ...keys.map((key) => changes[key])],
-		);
-		return rows[0] ? toIncident(rows[0]) : null;
+				[tenantId, id, expectedStatus, ...keys.map((key) => changes[key])],
+			);
+			if (!rows[0]) return null;
+			await insertAuditEntries(client, [audit]);
+			return toIncident(rows[0]);
+		});
 	}
 }

@@ -9,6 +9,7 @@ import type {
 	AlertRef,
 	AlertRepository,
 } from "../../domain/alerts/types";
+import { type AuditEntry, auditEntry, auditOrigin } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
 
 // Delay before retry n+1, after attempt n fails. Attempt 5 failing marks the alert failed.
@@ -55,6 +56,31 @@ const parseRef = (body: string): AlertRef | null => {
 	return isId(tenantId) && isId(alertId)
 		? { tenantId: tenantId as AlertRef["tenantId"], alertId }
 		: null;
+};
+
+// The worker's entries: an incident the alert opened, and the alert joining it. A resolved
+// alert that found no incident changed nothing, so it writes none.
+const groupingAudit = (
+	alert: Alert,
+	incidentId: string | null,
+	opened: boolean,
+	at: Date,
+): AuditEntry[] => {
+	if (!incidentId) return [];
+	const source = { type: "alert_source", id: alert.sourceId } as const;
+	const incident = { type: "incident", id: incidentId } as const;
+	const grouped = auditEntry(auditOrigin(at), alert.tenantId, "alert.grouped", source, incident, {
+		alertId: alert.id,
+		dedupKey: alert.dedupKey,
+	});
+	if (!opened) return [grouped];
+	return [
+		auditEntry(auditOrigin(at), alert.tenantId, "incident.created", source, incident, {
+			title: alert.title,
+			severity: alert.severity,
+		}),
+		grouped,
+	];
 };
 
 const errorText = (error: unknown) =>
@@ -129,7 +155,13 @@ export const createAlertProcessor = ({
 
 		try {
 			const at = now();
-			await alerts.complete(alert.tenantId, alert.id, candidateFor(alert, newId(), at), at);
+			await alerts.complete(
+				alert.tenantId,
+				alert.id,
+				candidateFor(alert, newId(), at),
+				at,
+				({ incidentId, opened }) => groupingAudit(alert, incidentId, opened, at),
+			);
 		} catch (error) {
 			onError(`alert ${alert.id}`, error);
 			const at = now();

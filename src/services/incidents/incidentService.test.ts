@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { anAudit } from "../../../tests/auditEntries";
 import type { IncidentRepository } from "../../domain/incidents/types";
 import type { Principal, TenantId } from "../../domain/shared/identity";
 import { InMemoryIncidentRepository } from "../../repository/incidents/inMemoryIncidentRepository";
@@ -75,7 +76,13 @@ describe("incidentService.acknowledge", () => {
 
 	it("refuses a resolved incident", async () => {
 		const { repository, service, id } = await setup();
-		await repository.update("tenant-a" as TenantId, id, "open", { status: "resolved" });
+		await repository.update(
+			"tenant-a" as TenantId,
+			id,
+			"open",
+			{ status: "resolved" },
+			anAudit("tenant-a" as TenantId, "incident.acknowledged"),
+		);
 
 		const result = await service.acknowledge(principal("responder"), id);
 
@@ -169,7 +176,13 @@ describe("incidentService.resolve", () => {
 			findById: (...args) => repository.findById(...args),
 			list: (...args) => repository.list(...args),
 			update: async (...args) => {
-				await repository.update(tenant, id, "open", { status: "acknowledged" });
+				await repository.update(
+					tenant,
+					id,
+					"open",
+					{ status: "acknowledged" },
+					anAudit(tenant, "incident.acknowledged"),
+				);
 				return repository.update(...args);
 			},
 		};

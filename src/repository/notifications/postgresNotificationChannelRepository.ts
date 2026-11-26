@@ -1,11 +1,13 @@
 import type { Pool } from "pg";
 import type { PageQuery } from "../../contract/common";
+import type { AuditEntry } from "../../domain/audit/types";
 import type {
 	NotificationChannel,
 	NotificationChannelPage,
 	NotificationChannelRepository,
 } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
+import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
 
 const COLUMNS =
 	"id, tenant_id, kind, name, target_ciphertext, target_hint, min_severity, enabled, created_at";
@@ -40,24 +42,29 @@ export class PostgresNotificationChannelRepository implements NotificationChanne
 	async create(
 		tenantId: TenantId,
 		channel: Omit<NotificationChannel, "tenantId">,
+		audit: AuditEntry,
 	): Promise<NotificationChannel | null> {
 		// The unique (tenant_id, name) index decides a duplicate, even under concurrent creates.
-		const { rows } = await this.pool.query<ChannelRow>(
-			`INSERT INTO notification_channels (${COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		return inTransaction(this.pool, async (client) => {
+			const { rows } = await client.query<ChannelRow>(
+				`INSERT INTO notification_channels (${COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT (tenant_id, name) DO NOTHING RETURNING ${COLUMNS}`,
-			[
-				channel.id,
-				tenantId,
-				channel.kind,
-				channel.name,
-				Buffer.from(channel.targetCiphertext),
-				channel.targetHint,
-				channel.minSeverity,
-				channel.enabled,
-				channel.createdAt,
-			],
-		);
-		return rows[0] ? toChannel(rows[0]) : null;
+				[
+					channel.id,
+					tenantId,
+					channel.kind,
+					channel.name,
+					Buffer.from(channel.targetCiphertext),
+					channel.targetHint,
+					channel.minSeverity,
+					channel.enabled,
+					channel.createdAt,
+				],
+			);
+			if (!rows[0]) return null;
+			await insertAuditEntries(client, [audit]);
+			return toChannel(rows[0]);
+		});
 	}
 
 	async list(tenantId: TenantId, { limit, offset }: PageQuery): Promise<NotificationChannelPage> {

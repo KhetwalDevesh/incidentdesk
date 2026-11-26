@@ -7,9 +7,12 @@ import type {
 	AlertPage,
 	AlertRef,
 	AlertRepository,
+	GroupingOutcome,
 } from "../../domain/alerts/types";
+import type { AuditEntry } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { TenantId } from "../../domain/shared/identity";
+import { insertAuditEntries } from "../audit/postgresAuditRepository";
 import { INCIDENT_COLUMNS } from "../incidents/postgresIncidentRepository";
 
 const COLUMNS =
@@ -61,12 +64,12 @@ const OPEN_OR_ATTACH = `INSERT INTO incidents (${INCIDENT_COLUMNS})
 	ON CONFLICT (tenant_id, alert_source_id, dedup_key) WHERE status <> 'resolved'
 	DO UPDATE SET alert_count = incidents.alert_count + 1,
 		last_alert_at = GREATEST(incidents.last_alert_at, EXCLUDED.last_alert_at)
-	RETURNING id`;
+	RETURNING id, (xmax = 0) AS opened`;
 
 const ATTACH_ONLY = `UPDATE incidents SET alert_count = alert_count + 1,
 		last_alert_at = GREATEST(last_alert_at, $4)
 	WHERE tenant_id = $1 AND alert_source_id = $2 AND dedup_key = $3 AND status <> 'resolved'
-	RETURNING id`;
+	RETURNING id, false AS opened`;
 
 export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 	constructor(private readonly pool: Pool) {}
@@ -166,6 +169,7 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 		alertId: string,
 		candidate: Omit<Incident, "tenantId"> | null,
 		processedAt: Date,
+		audit: (outcome: GroupingOutcome) => AuditEntry[],
 	): Promise<{ incidentId: IncidentId | null } | null> {
 		return this.transaction(async (client) => {
 			// Locks the alert, so a second worker holding an expired lease waits, then sees it processed.
@@ -177,7 +181,7 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 			if (!alert) return null;
 
 			const grouped = candidate
-				? await client.query<{ id: string }>(OPEN_OR_ATTACH, [
+				? await client.query<{ id: string; opened: boolean }>(OPEN_OR_ATTACH, [
 						candidate.id,
 						tenantId,
 						candidate.title,
@@ -194,19 +198,22 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 						candidate.alertCount,
 						alert.received_at,
 					])
-				: await client.query<{ id: string }>(ATTACH_ONLY, [
+				: await client.query<{ id: string; opened: boolean }>(ATTACH_ONLY, [
 						tenantId,
 						alert.source_id,
 						alert.dedup_key,
 						alert.received_at,
 					]);
 			const incidentId = (grouped.rows[0]?.id ?? null) as IncidentId | null;
+			// xmax is 0 only for a row this statement inserted, so the candidate opened it.
+			const opened = grouped.rows[0]?.opened ?? false;
 
 			await client.query(
 				`UPDATE alerts SET state = 'processed', incident_id = $3, last_error = NULL, processed_at = $4
 				WHERE tenant_id = $1 AND id = $2`,
 				[tenantId, alertId, incidentId, processedAt],
 			);
+			await insertAuditEntries(client, audit({ incidentId, opened }));
 			return { incidentId };
 		});
 	}

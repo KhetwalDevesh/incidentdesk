@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import type { PageQuery } from "../../contract/common";
+import type { AuditEntry } from "../../domain/audit/types";
 import type {
 	AccountRepository,
 	CredentialStore,
@@ -9,6 +10,7 @@ import type {
 	UserPage,
 } from "../../domain/auth/types";
 import type { Role, TenantId } from "../../domain/shared/identity";
+import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
 
 const USER_COLUMNS = "id, tenant_id, email, role, password_hash, created_at";
 
@@ -61,7 +63,11 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 		}
 	}
 
-	async createTenantWithAdmin(tenant: Tenant, admin: Omit<User, "tenantId">): Promise<boolean> {
+	async createTenantWithAdmin(
+		tenant: Tenant,
+		admin: Omit<User, "tenantId">,
+		audit: AuditEntry,
+	): Promise<boolean> {
 		return this.transaction(async (client) => {
 			await client.query("INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, $3)", [
 				tenant.id,
@@ -69,7 +75,9 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 				tenant.createdAt,
 			]);
 			const { rowCount } = await client.query(INSERT_USER, userValues(tenant.id, admin));
-			return rowCount === 1;
+			if (rowCount !== 1) return false;
+			await insertAuditEntries(client, [audit]);
+			return true;
 		});
 	}
 
@@ -82,9 +90,16 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 	}
 
 	// One statement: the token row lock makes a second concurrent redemption see used_at set.
-	async redeemSetupToken(tokenHash: string, now: Date, passwordHash: string): Promise<User | null> {
-		const { rows } = await this.pool.query<UserRow>(
-			`WITH redeemed AS (
+	// The audit entry joins its transaction once the redeemed user is known.
+	async redeemSetupToken(
+		tokenHash: string,
+		now: Date,
+		passwordHash: string,
+		audit: (user: User) => AuditEntry,
+	): Promise<User | null> {
+		return inTransaction(this.pool, async (client) => {
+			const { rows } = await client.query<UserRow>(
+				`WITH redeemed AS (
 				UPDATE password_setup_tokens SET used_at = $2
 				WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
 				RETURNING tenant_id, user_id
@@ -92,9 +107,13 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 			UPDATE users u SET password_hash = $3
 			FROM redeemed r WHERE u.tenant_id = r.tenant_id AND u.id = r.user_id
 			RETURNING u.id, u.tenant_id, u.email, u.role, u.password_hash, u.created_at`,
-			[tokenHash, now, passwordHash],
-		);
-		return rows[0] ? toUser(rows[0]) : null;
+				[tokenHash, now, passwordHash],
+			);
+			if (!rows[0]) return null;
+			const user = toUser(rows[0]);
+			await insertAuditEntries(client, [audit(user)]);
+			return user;
+		});
 	}
 
 	async findUser(tenantId: TenantId, userId: string): Promise<User | null> {
@@ -123,6 +142,7 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 		tenantId: TenantId,
 		user: Omit<User, "tenantId">,
 		setupToken: NewSetupToken,
+		audit: AuditEntry,
 	): Promise<boolean> {
 		return this.transaction(async (client) => {
 			const { rowCount } = await client.query(INSERT_USER, userValues(tenantId, user));
@@ -131,6 +151,7 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 				"INSERT INTO password_setup_tokens (token_hash, tenant_id, user_id, expires_at) VALUES ($1, $2, $3, $4)",
 				[setupToken.tokenHash, tenantId, user.id, setupToken.expiresAt],
 			);
+			await insertAuditEntries(client, [audit]);
 			return true;
 		});
 	}

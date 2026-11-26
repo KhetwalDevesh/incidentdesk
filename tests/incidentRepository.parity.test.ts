@@ -7,6 +7,7 @@ import type { TenantId } from "../src/domain/shared/identity";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
 import { PostgresIncidentRepository } from "../src/repository/incidents/postgresIncidentRepository";
 import { runMigrations } from "../src/repository/postgres/migrate";
+import { anAudit } from "./auditEntries";
 
 // Matches docker-compose.yml. CI sets TEST_DATABASE_URL to its own service.
 const TEST_DATABASE_URL =
@@ -62,7 +63,7 @@ describe.each([
 	it("round-trips every field", async () => {
 		const incident = newIncident(new Date("2026-01-01T00:00:00.123Z"));
 
-		const created = await repository.create(acme, incident);
+		const created = await repository.create(acme, incident, anAudit(acme));
 
 		expect(created).toEqual({ ...incident, tenantId: acme });
 		expect(await repository.findById(acme, incident.id)).toEqual(created);
@@ -70,7 +71,7 @@ describe.each([
 
 	it("hides another tenant's incident from findById", async () => {
 		const incident = newIncident(new Date());
-		await repository.create(acme, incident);
+		await repository.create(acme, incident, anAudit(acme));
 
 		expect(await repository.findById(globex, incident.id)).toBeNull();
 	});
@@ -78,9 +79,9 @@ describe.each([
 	it("lists only the tenant's incidents, newest first, with a total", async () => {
 		const older = newIncident(new Date("2026-01-01T00:00:00Z"), "Older");
 		const newer = newIncident(new Date("2026-01-02T00:00:00Z"), "Newer");
-		await repository.create(acme, older);
-		await repository.create(acme, newer);
-		await repository.create(globex, newIncident(new Date()));
+		await repository.create(acme, older, anAudit(acme));
+		await repository.create(acme, newer, anAudit(acme));
+		await repository.create(globex, newIncident(new Date()), anAudit(globex));
 
 		const page = await repository.list(acme, { limit: 1, offset: 0 });
 
@@ -94,7 +95,7 @@ describe.each([
 	it("breaks createdAt ties by id", async () => {
 		const at = new Date("2026-01-01T00:00:00Z");
 		const incidents = [newIncident(at), newIncident(at), newIncident(at)];
-		for (const incident of incidents) await repository.create(acme, incident);
+		for (const incident of incidents) await repository.create(acme, incident, anAudit(acme));
 
 		const page = await repository.list(acme, { limit: 10, offset: 0 });
 
@@ -102,21 +103,27 @@ describe.each([
 	});
 
 	it("returns an empty page past the end, with the real total", async () => {
-		await repository.create(acme, newIncident(new Date()));
+		await repository.create(acme, newIncident(new Date()), anAudit(acme));
 
 		expect(await repository.list(acme, { limit: 10, offset: 5 })).toEqual({ items: [], total: 1 });
 	});
 
 	it("updates when the status still matches", async () => {
 		const incident = newIncident(new Date());
-		await repository.create(acme, incident);
+		await repository.create(acme, incident, anAudit(acme));
 		const at = new Date("2026-01-03T00:00:00Z");
 
-		const updated = await repository.update(acme, incident.id, "open", {
-			status: "acknowledged",
-			acknowledgedAt: at,
-			acknowledgedBy: "user-2",
-		});
+		const updated = await repository.update(
+			acme,
+			incident.id,
+			"open",
+			{
+				status: "acknowledged",
+				acknowledgedAt: at,
+				acknowledgedBy: "user-2",
+			},
+			anAudit(acme, "incident.acknowledged"),
+		);
 
 		expect(updated).toMatchObject({
 			status: "acknowledged",
@@ -128,14 +135,20 @@ describe.each([
 
 	it("round-trips the resolution fields", async () => {
 		const incident = newIncident(new Date());
-		await repository.create(acme, incident);
+		await repository.create(acme, incident, anAudit(acme));
 		const at = new Date("2026-01-04T00:00:00Z");
 
-		const updated = await repository.update(acme, incident.id, "open", {
-			status: "resolved",
-			resolvedAt: at,
-			resolvedBy: "user-3",
-		});
+		const updated = await repository.update(
+			acme,
+			incident.id,
+			"open",
+			{
+				status: "resolved",
+				resolvedAt: at,
+				resolvedBy: "user-3",
+			},
+			anAudit(acme, "incident.acknowledged"),
+		);
 
 		expect(updated).toMatchObject({ status: "resolved", resolvedAt: at, resolvedBy: "user-3" });
 		expect(await repository.findById(acme, incident.id)).toEqual(updated);
@@ -143,33 +156,59 @@ describe.each([
 
 	it("refuses an update when the status has moved on", async () => {
 		const incident = newIncident(new Date());
-		await repository.create(acme, incident);
-		await repository.update(acme, incident.id, "open", { status: "resolved" });
+		await repository.create(acme, incident, anAudit(acme));
+		await repository.update(
+			acme,
+			incident.id,
+			"open",
+			{ status: "resolved" },
+			anAudit(acme, "incident.acknowledged"),
+		);
 
 		expect(
-			await repository.update(acme, incident.id, "open", { status: "acknowledged" }),
+			await repository.update(
+				acme,
+				incident.id,
+				"open",
+				{ status: "acknowledged" },
+				anAudit(acme, "incident.acknowledged"),
+			),
 		).toBeNull();
 		expect((await repository.findById(acme, incident.id))?.status).toBe("resolved");
 	});
 
 	it("refuses to update another tenant's incident", async () => {
 		const incident = newIncident(new Date());
-		await repository.create(acme, incident);
+		await repository.create(acme, incident, anAudit(acme));
 
-		expect(await repository.update(globex, incident.id, "open", { status: "resolved" })).toBeNull();
+		expect(
+			await repository.update(
+				globex,
+				incident.id,
+				"open",
+				{ status: "resolved" },
+				anAudit(globex, "incident.acknowledged"),
+			),
+		).toBeNull();
 		expect((await repository.findById(acme, incident.id))?.status).toBe("open");
 	});
 
 	it("lets exactly one of many concurrent updates win", async () => {
 		const incident = newIncident(new Date());
-		await repository.create(acme, incident);
+		await repository.create(acme, incident, anAudit(acme));
 
 		const results = await Promise.all(
 			Array.from({ length: 10 }, (_, n) =>
-				repository.update(acme, incident.id, "open", {
-					status: "acknowledged",
-					acknowledgedBy: `user-${n}`,
-				}),
+				repository.update(
+					acme,
+					incident.id,
+					"open",
+					{
+						status: "acknowledged",
+						acknowledgedBy: `user-${n}`,
+					},
+					anAudit(acme, "incident.acknowledged"),
+				),
 			),
 		);
 

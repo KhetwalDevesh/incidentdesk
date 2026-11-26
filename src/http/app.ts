@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { AlertIngestService, AlertService, AlertSourceService } from "../domain/alerts/types";
+import type { AuditService } from "../domain/audit/types";
 import type { AuthService, MemberService } from "../domain/auth/types";
 import type { IncidentService } from "../domain/incidents/types";
 import type { NotificationChannelService } from "../domain/notifications/types";
 import { alertSourceRoutes } from "../routes/alertSources";
 import { alertRoutes } from "../routes/alerts";
 import { alertWebhookRoutes } from "../routes/alertWebhooks";
+import { auditRoutes } from "../routes/audit";
 import { authRoutes } from "../routes/auth";
 import { healthRoutes } from "../routes/health";
 import { incidentRoutes } from "../routes/incidents";
@@ -28,6 +30,7 @@ export type AppDeps = {
 	alertSourceService: AlertSourceService;
 	alertService: AlertService;
 	alertIngestService: AlertIngestService;
+	auditService: AuditService;
 };
 
 export const createApp = ({
@@ -39,6 +42,7 @@ export const createApp = ({
 	alertSourceService,
 	alertService,
 	alertIngestService,
+	auditService,
 }: AppDeps) => {
 	const app = new Hono<AppEnv>();
 
@@ -68,6 +72,8 @@ export const createApp = ({
 	app.route("/v1/notification-channels", notificationChannelRoutes(notificationChannelService));
 	app.route("/v1/alert-sources", alertSourceRoutes(alertSourceService));
 	app.route("/v1/alerts", alertRoutes(alertService));
+	// /v1/audit-events and /v1/incidents/{id}/events.
+	app.route("/v1", auditRoutes(auditService));
 
 	return app;
 };

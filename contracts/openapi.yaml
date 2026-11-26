@@ -151,6 +151,99 @@ components:
         - limit
         - offset
       additionalProperties: false
+    AuditEventList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    AuditEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        occurredAt:
+          type: string
+          format: date-time
+        action:
+          type: string
+          enum:
+            - tenant.created
+            - member.invited
+            - member.setup_completed
+            - user.login_succeeded
+            - user.login_failed
+            - incident.created
+            - incident.acknowledged
+            - incident.resolved
+            - alert.grouped
+            - alert_source.created
+            - notification_channel.created
+        actor:
+          type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - user
+                - alert_source
+                - anonymous
+            id:
+              type:
+                - string
+                - "null"
+          required:
+            - type
+            - id
+          additionalProperties: false
+        resource:
+          type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - tenant
+                - user
+                - incident
+                - alert_source
+                - notification_channel
+            id:
+              type: string
+          required:
+            - type
+            - id
+          additionalProperties: false
+        details:
+          type: object
+          additionalProperties:
+            type: string
+        requestId:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - occurredAt
+        - action
+        - actor
+        - resource
+        - details
+        - requestId
+      additionalProperties: false
     AccessToken:
       type: object
       properties:
@@ -825,6 +918,156 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/events:
+    get:
+      summary: An incident's audit timeline, oldest first
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of the incident's audit events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/audit-events:
+    get:
+      summary: List the caller's tenant's audit events, newest first
+      description: Every role may read the whole log. Entries are append-only and kept
+        for 90 days.
+      security: *a1
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+        - schema:
+            type: string
+            enum:
+              - tenant.created
+              - member.invited
+              - member.setup_completed
+              - user.login_succeeded
+              - user.login_failed
+              - incident.created
+              - incident.acknowledged
+              - incident.resolved
+              - alert.grouped
+              - alert_source.created
+              - notification_channel.created
+          required: false
+          name: action
+          in: query
+        - schema:
+            type: string
+            enum:
+              - tenant
+              - user
+              - incident
+              - alert_source
+              - notification_channel
+          required: false
+          name: resourceType
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+          required: false
+          name: resourceId
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+          required: false
+          name: actorId
+          in: query
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: from
+          in: query
+        - schema:
+            type: string
+            format: date-time
+          required: false
+          name: to
+          in: query
+      responses:
+        "200":
+          description: A page of audit events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Query failed validation
           content:
             application/problem+json:
               schema:

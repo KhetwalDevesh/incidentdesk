@@ -10,6 +10,7 @@ import {
 	CreateAlertSourceRequestSchema,
 	CreatedAlertSourceSchema,
 } from "./alerts";
+import { AuditEventListSchema, AuditEventQuerySchema } from "./audit";
 import {
 	AccessTokenSchema,
 	LoginRequestSchema,
@@ -123,6 +124,34 @@ registry.registerPath({
 		404: problem("No such incident in this tenant"),
 		409: problem("Incident is already resolved, or changed while resolving"),
 		422: problem("Id is not a UUID"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/incidents/{id}/events",
+	summary: "An incident's audit timeline, oldest first",
+	security,
+	request: { params: z.object({ id: z.uuid() }), query: PageQuerySchema },
+	responses: {
+		200: json(AuditEventListSchema, "A page of the incident's audit events"),
+		...authErrors,
+		404: problem("No such incident in this tenant"),
+		422: problem("Id or query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/audit-events",
+	summary: "List the caller's tenant's audit events, newest first",
+	description: "Every role may read the whole log. Entries are append-only and kept for 90 days.",
+	security,
+	request: { query: AuditEventQuerySchema },
+	responses: {
+		200: json(AuditEventListSchema, "A page of audit events"),
+		...authErrors,
+		422: problem("Query failed validation"),
 	},
 });
 
