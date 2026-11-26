@@ -28,7 +28,7 @@ The viewer role was removed in `docs/features/on-call-schedules.md`.
 | 1. Foundation | Rules, contract, CI, golden reference slice | Done |
 | 2. Core | Postgres, real auth, tenants, roles | Done |
 | 3. Pipeline | Signed webhooks, queue, grouping, audit log | Done |
-| 4. Team flow | On-call, Slack, dashboard, realtime status | In progress (Slack delivery, on-call schedules and assignment, dashboard stats done; realtime status left) |
+| 4. Team flow | On-call, Slack, dashboard, realtime status | Done |
 | 5. AI | Summaries, severity suggestions, postmortems | Planned |
 | 6. Hardening | Load test, security review, AWS deployment | Planned |
 

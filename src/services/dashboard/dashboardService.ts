@@ -1,10 +1,13 @@
 import { MAX_DASHBOARD_LOAD_ROWS } from "../../contract/dashboard";
 import type { AccountRepository } from "../../domain/auth/types";
 import type {
+	Dashboard,
 	DashboardService,
 	IncidentStatsReader,
+	StatsWindow,
 	StatusCounts,
 } from "../../domain/dashboard/types";
+import type { TenantId } from "../../domain/shared/identity";
 import { ok } from "../../domain/shared/result";
 
 // Spec: docs/features/dashboard-stats.md
@@ -24,24 +27,22 @@ const sum = (counts: StatusCounts[]) =>
 		{ open: 0, acknowledged: 0 },
 	);
 
-export const createDashboardService = ({
-	stats,
-	members,
-	now = () => new Date(),
-}: DashboardServiceDeps): DashboardService => ({
-	// Every member may read it: the numbers cover incidents and members they can already see.
-	async get(principal, window) {
+// Builds the dashboard for a tenant. Shared with the realtime hub, which pushes it after
+// incident changes.
+export const createDashboardBuilder =
+	({ stats, members, now = () => new Date() }: DashboardServiceDeps) =>
+	async (tenantId: TenantId, window: StatsWindow): Promise<Dashboard> => {
 		const generatedAt = now();
 		const [unresolved, load] = await Promise.all([
-			stats.unresolvedStats(principal.tenantId, window),
-			stats.load(principal.tenantId, window, MAX_DASHBOARD_LOAD_ROWS),
+			stats.unresolvedStats(tenantId, window),
+			stats.load(tenantId, window, MAX_DASHBOARD_LOAD_ROWS),
 		]);
 		const users = await members.findUsers(
-			principal.tenantId,
+			tenantId,
 			load.items.map((row) => row.userId),
 		);
 		const emails = new Map(users.map((user) => [user.id, user.email]));
-		return ok({
+		return {
 			generatedAt,
 			window,
 			totals: { ...sum(Object.values(unresolved.bySeverity)), unassigned: unresolved.unassigned },
@@ -59,6 +60,13 @@ export const createDashboardService = ({
 						(a.email < b.email ? -1 : a.email > b.email ? 1 : 0),
 				),
 			assigneeCount: load.assigneeCount,
-		});
-	},
-});
+		};
+	};
+
+export const createDashboardService = (deps: DashboardServiceDeps): DashboardService => {
+	const build = createDashboardBuilder(deps);
+	return {
+		// Every member may read it: the numbers cover incidents and members they can already see.
+		get: async (principal, window) => ok(await build(principal.tenantId, window)),
+	};
+};

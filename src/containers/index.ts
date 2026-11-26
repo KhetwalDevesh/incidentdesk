@@ -5,6 +5,7 @@ import { createArgon2PasswordHasher } from "../adapters/argon2PasswordHasher";
 import { createFetchWebhookSender } from "../adapters/fetchWebhookSender";
 import { createHmacAlertSignatureVerifier } from "../adapters/hmacAlertSignature";
 import { createJwtTokenService } from "../adapters/jwtTokenService";
+import { createPgChangeFeed } from "../adapters/pgChangeFeed";
 import { createSqsQueue } from "../adapters/sqsQueue";
 import type { Config } from "../config";
 import { alertQueueBody } from "../domain/alerts/types";
@@ -30,8 +31,12 @@ import { createAlertSourceService } from "../services/alerts/alertSourceService"
 import { createAuditPurge } from "../services/audit/auditPurge";
 import { createAuditService } from "../services/audit/auditService";
 import { createAuthService } from "../services/auth/authService";
-import { createDashboardService } from "../services/dashboard/dashboardService";
-import { createIncidentService } from "../services/incidents/incidentService";
+import {
+	createDashboardBuilder,
+	createDashboardService,
+} from "../services/dashboard/dashboardService";
+import { createEventHub } from "../services/events/eventHub";
+import { createIncidentService, createIncidentViews } from "../services/incidents/incidentService";
 import { createMemberService } from "../services/members/memberService";
 import { createDeliveryDispatcher } from "../services/notifications/deliveryDispatcher";
 import { createDeliveryProcessor } from "../services/notifications/deliveryProcessor";
@@ -55,6 +60,8 @@ export type AppErrorLog = {
 	onAlertSendError: (alertId: string, error: unknown) => void;
 	onDeliverySendError: (deliveryId: string, error: unknown) => void;
 	onAuditError: (entryId: string, error: unknown) => void;
+	// Realtime streams: a subject such as "change feed", never a payload.
+	onRealtimeError: (subject: string, error: unknown) => void;
 };
 
 export const buildApp = (config: Config, log: AppErrorLog) => {
@@ -77,6 +84,17 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 	const incidents = new PostgresIncidentRepository(pool);
 	const deliveries = new PostgresNotificationDeliveryRepository(pool);
 	const schedules = new PostgresOnCallRepository(pool);
+	const dashboardDeps = { stats: new PostgresIncidentStatsReader(pool), members: accounts };
+	// One LISTEN connection per instance, outside the pool. Spec: docs/features/realtime-status.md.
+	const feed = createPgChangeFeed({ connectionString: config.DATABASE_URL }, log.onRealtimeError);
+	const eventHub = createEventHub({
+		feed,
+		incidents,
+		views: createIncidentViews(accounts),
+		schedules,
+		dashboard: (tenantId) => createDashboardBuilder(dashboardDeps)(tenantId, null),
+		onError: log.onRealtimeError,
+	});
 
 	const app = createApp({
 		authenticate: authService.authenticate,
@@ -109,12 +127,10 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 		}),
 		auditService: createAuditService(audit, incidents),
 		onCallScheduleService: createOnCallScheduleService(schedules),
-		dashboardService: createDashboardService({
-			stats: new PostgresIncidentStatsReader(pool),
-			members: accounts,
-		}),
+		dashboardService: createDashboardService(dashboardDeps),
+		eventHub,
 	});
-	return { app, pool };
+	return { app, pool, eventHub, feed };
 };
 
 // The worker: turns queued alerts into incidents, and posts Slack deliveries. See src/worker.ts.

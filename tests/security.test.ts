@@ -36,6 +36,7 @@ import {
 	TEST_ENCRYPTION_KEY,
 	TEST_JWT_SECRET,
 } from "./helpers";
+import { openStream } from "./sse";
 
 const PASSWORD = "correct horse battery";
 
@@ -1059,5 +1060,50 @@ describe("dashboard", () => {
 		const res = await app.request("/v1/dashboard?tenantId=tenant-globex", authed("acme-responder"));
 
 		expect(DashboardSchema.parse(await res.json()).totals.open).toBe(0);
+	});
+});
+
+// Spec: docs/features/realtime-status.md
+describe("realtime", () => {
+	it("never sends a stream another tenant's changes", async () => {
+		const system = buildTestSystem();
+		const acme = await signup(system.app, "ada@acme.example", "Acme");
+		const globex = await signup(system.app, "hank@globex.example", "Globex");
+		const stream = await openStream(system.app, acme);
+		await stream.next();
+
+		const foreign = IncidentSchema.parse(
+			await (await system.app.request("/v1/incidents", authed(globex, validBody))).json(),
+		);
+		await system.app.request(
+			"/v1/on-call-schedules",
+			authed(globex, {
+				name: "Globex",
+				timeZone: "UTC",
+				handoffTime: "09:00",
+				rotationDays: 7,
+				startsOn: "2026-01-05",
+			}),
+		);
+		const own = IncidentSchema.parse(
+			await (await system.app.request("/v1/incidents", authed(acme, validBody))).json(),
+		);
+		// Events keep order, so everything before acme's own incident has arrived by then.
+		const events = await stream.until("dashboard");
+
+		expect(events.map((event) => event.event)).toEqual(["incident.opened", "dashboard"]);
+		expect(events[0]?.data).toMatchObject({ incident: { id: own.id } });
+		expect(JSON.stringify(events)).not.toContain(foreign.id);
+		expect(JSON.stringify(events)).not.toContain("globex");
+		await stream.close();
+	});
+
+	it("accepts a token only in the Authorization header", async () => {
+		const app = buildTestApp();
+		const token = await signup(app, "ada@acme.example", "Acme");
+
+		const res = await app.request(`/v1/events?token=${token}&access_token=${token}`);
+
+		expect(res.status).toBe(401);
 	});
 });

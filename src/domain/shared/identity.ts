@@ -9,6 +9,9 @@ export type Principal = {
 	tenantId: TenantId;
 	userId: string;
 	role: Role;
+	// When the credential stops being valid. A realtime stream closes then. Absent for
+	// credentials that do not expire, such as fixed test tokens.
+	expiresAt?: Date;
 };
 
 export const isAdmin = (principal: Principal): boolean => principal.role === "admin";

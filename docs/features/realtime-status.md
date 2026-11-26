@@ -1,6 +1,6 @@
 # Realtime status
 
-Status: Approved
+Status: Done
 
 Phase 4, "realtime status": the last Phase 4 item. A stream of changes for each tenant, so a UI or wallboard updates the moment something happens instead of polling.
 
@@ -125,9 +125,9 @@ None. There is no new table and no migration. `NOTIFY` needs no schema.
 
 ## Done when
 
-- [ ] Each change sends its notice only when its transaction commits, in Postgres and in memory, from both the API and the alert worker (`tests/changeFeed.parity.test.ts`)
-- [ ] `GET /v1/events` sends `ready`, then each listed event with the documented payload, and a debounced `dashboard` after incident changes (`tests/events.contract.test.ts`)
-- [ ] Streams close at token expiry and on member removal; a sixth stream closes the oldest; a full buffer closes the stream; a reconnected listener sends `resync` (`tests/events.contract.test.ts`, `src/services/events/eventHub.test.ts`)
-- [ ] Another tenant's changes never reach a stream, and `?token=` is not accepted (`tests/security.test.ts`, "realtime")
-- [ ] Contract regenerated: one new path, no breaking change
-- [ ] `pnpm check` passes
+- [x] Each change sends its notice only when its transaction commits, in Postgres and in memory, from both the API and the alert worker (`tests/changeFeed.parity.test.ts`)
+- [x] `GET /v1/events` sends `ready`, then each listed event with the documented payload, and a debounced `dashboard` after incident changes (`tests/events.contract.test.ts`)
+- [x] Streams close at token expiry and on member removal; a sixth stream closes the oldest; a full buffer closes the stream; a reconnected listener sends `resync` (`tests/events.contract.test.ts`, `src/services/events/eventHub.test.ts`, `tests/changeFeed.parity.test.ts`)
+- [x] Another tenant's changes never reach a stream, and `?token=` is not accepted (`tests/security.test.ts`, "realtime")
+- [x] Contract regenerated: one new path, no breaking change
+- [x] `pnpm check` passes

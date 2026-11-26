@@ -466,6 +466,31 @@ registry.registerPath({
 	},
 });
 
+registry.registerPath({
+	method: "get",
+	path: "/v1/events",
+	summary: "A live stream of the tenant's changes, as Server-Sent Events",
+	description: [
+		"Authenticate with the Authorization header, so read the stream with fetch, not EventSource.",
+		"Events: ready and resync (data {}): fetch current state now;",
+		"incident.opened, incident.acknowledged, incident.resolved and incident.reassigned ({ incident: Incident });",
+		"dashboard (Dashboard, no window), at most once a second;",
+		"on_call_schedule.created and on_call_schedule.updated ({ schedule: OnCallSchedule });",
+		"on_call_schedule.deleted ({ id }); on_call_override.created ({ scheduleId, override: OnCallOverride });",
+		"on_call_override.deleted ({ scheduleId, id }).",
+		"The stream closes when the token expires or the member is removed. There is no replay.",
+		"Spec: docs/features/realtime-status.md.",
+	].join(" "),
+	security,
+	responses: {
+		200: {
+			description: "An open event stream",
+			content: { "text/event-stream": { schema: z.string() } },
+		},
+		...authErrors,
+	},
+});
+
 // On-call schedules. Spec: docs/features/on-call-schedules.md.
 const scheduleParams = z.object({ id: OnCallScheduleIdSchema });
 

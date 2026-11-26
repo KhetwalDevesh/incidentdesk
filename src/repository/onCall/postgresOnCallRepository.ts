@@ -14,6 +14,7 @@ import type {
 } from "../../domain/onCall/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
+import { publishChange } from "../events/postgresChangePublisher";
 
 // Spec: docs/features/on-call-schedules.md
 
@@ -189,6 +190,12 @@ export class PostgresOnCallRepository implements OnCallRepository {
 			);
 			await writeParticipants(client, tenantId, schedule.id, schedule.participantIds);
 			await insertAuditEntries(client, [audit]);
+			await publishChange(client, {
+				kind: "on_call_schedule",
+				tenantId,
+				id: schedule.id,
+				event: "on_call_schedule.created",
+			});
 			const saved = await findSchedule(client, tenantId, schedule.id);
 			return saved ? { status: "saved", schedule: saved } : { status: "not_found" };
 		});
@@ -228,6 +235,12 @@ export class PostgresOnCallRepository implements OnCallRepository {
 				await writeParticipants(client, tenantId, id, patch.participantIds);
 			}
 			await insertAuditEntries(client, [audit(before)]);
+			await publishChange(client, {
+				kind: "on_call_schedule",
+				tenantId,
+				id,
+				event: "on_call_schedule.updated",
+			});
 			const saved = await findSchedule(client, tenantId, id);
 			return saved ? { status: "saved", schedule: saved } : { status: "not_found" };
 		});
@@ -249,6 +262,12 @@ export class PostgresOnCallRepository implements OnCallRepository {
 				id,
 			]);
 			await insertAuditEntries(client, [audit(schedule)]);
+			await publishChange(client, {
+				kind: "on_call_schedule",
+				tenantId,
+				id,
+				event: "on_call_schedule.deleted",
+			});
 			return true;
 		});
 	}
@@ -368,6 +387,13 @@ export class PostgresOnCallRepository implements OnCallRepository {
 				],
 			);
 			await insertAuditEntries(client, [audit]);
+			await publishChange(client, {
+				kind: "on_call_override",
+				tenantId,
+				scheduleId: override.scheduleId,
+				id: override.id,
+				event: "on_call_override.created",
+			});
 			const { rows } = await client.query<OverrideRow>(
 				`${OVERRIDE_SELECT} WHERE o.tenant_id = $1 AND o.id = $2`,
 				[tenantId, override.id],
@@ -390,6 +416,13 @@ export class PostgresOnCallRepository implements OnCallRepository {
 			);
 			if (rowCount === 0) return false;
 			await insertAuditEntries(client, [audit]);
+			await publishChange(client, {
+				kind: "on_call_override",
+				tenantId,
+				scheduleId,
+				id: overrideId,
+				event: "on_call_override.deleted",
+			});
 			return true;
 		});
 	}
