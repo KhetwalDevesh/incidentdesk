@@ -156,3 +156,49 @@ export interface MemberService {
 		context?: RequestContext,
 	): Promise<Result<void>>;
 }
+
+// ---- Throttling public auth routes. Spec: docs/features/login-rate-limiting.md
+
+export type ThrottleRule = {
+	// Counted events allowed in one window. Reaching it locks the key.
+	limit: number;
+	windowMs: number;
+	lockMs: number;
+};
+
+const MINUTE_MS = 60_000;
+
+export const THROTTLE_RULES = {
+	loginEmail: { limit: 5, windowMs: 15 * MINUTE_MS, lockMs: 15 * MINUTE_MS },
+	loginIp: { limit: 30, windowMs: 15 * MINUTE_MS, lockMs: 15 * MINUTE_MS },
+	setupIp: { limit: 10, windowMs: 15 * MINUTE_MS, lockMs: 15 * MINUTE_MS },
+	signupIp: { limit: 10, windowMs: 60 * MINUTE_MS, lockMs: 60 * MINUTE_MS },
+} as const satisfies Record<string, ThrottleRule>;
+
+// Stale keys are purged this long after their last event and lock.
+export const THROTTLE_RETENTION_MS = 24 * 60 * MINUTE_MS;
+
+// Keys never hold an email: only its SHA-256, so the table holds no address.
+export const throttleKeys = {
+	loginEmail: (email: string) =>
+		`login:email:${createHash("sha256").update(email.toLowerCase()).digest("hex")}`,
+	loginIp: (ip: string | null) => `login:ip:${ip ?? "unknown"}`,
+	setupIp: (ip: string | null) => `setup:ip:${ip ?? "unknown"}`,
+	signupIp: (ip: string | null) => `signup:ip:${ip ?? "unknown"}`,
+};
+
+// What recording one event did. `lockedNow` is true only for the event that started a lock.
+export type ThrottleOutcome = { count: number; lockedUntil: Date | null; lockedNow: boolean };
+
+// Runs before any tenant is known: keys are global. Audit every caller.
+export interface LoginThrottle {
+	// The latest lock end among these keys still in the future, or null when none is locked.
+	lockedUntil(keys: string[], now: Date): Promise<Date | null>;
+	// Counts one event, in one atomic step: starts a new window when the old one has passed,
+	// and locks the key when the count reaches the rule's limit.
+	record(key: string, rule: ThrottleRule, now: Date): Promise<ThrottleOutcome>;
+	// Forgets the key's count, as after a successful sign-in.
+	clear(key: string): Promise<void>;
+	// Deletes up to `limit` keys whose last event and lock both ended before `cutoff`.
+	purgeOlderThan(cutoff: Date, limit: number): Promise<number>;
+}

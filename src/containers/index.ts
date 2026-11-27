@@ -9,6 +9,7 @@ import { createPgChangeFeed } from "../adapters/pgChangeFeed";
 import { createSqsQueue } from "../adapters/sqsQueue";
 import type { Config } from "../config";
 import { alertQueueBody } from "../domain/alerts/types";
+import { THROTTLE_RETENTION_MS } from "../domain/auth/types";
 import {
 	createWebhookPolicy,
 	DELIVERY_RETENTION_MS,
@@ -19,6 +20,7 @@ import { PostgresAccountRepository } from "../repository/accounts/postgresAccoun
 import { PostgresAlertRepository } from "../repository/alerts/postgresAlertRepository";
 import { PostgresAlertSourceRepository } from "../repository/alerts/postgresAlertSourceRepository";
 import { PostgresAuditRepository } from "../repository/audit/postgresAuditRepository";
+import { PostgresLoginThrottle } from "../repository/auth/postgresLoginThrottle";
 import { PostgresIncidentStatsReader } from "../repository/dashboard/postgresIncidentStatsReader";
 import { PostgresIncidentRepository } from "../repository/incidents/postgresIncidentRepository";
 import { PostgresNotificationChannelRepository } from "../repository/notifications/postgresNotificationChannelRepository";
@@ -62,6 +64,8 @@ export type AppErrorLog = {
 	onAuditError: (entryId: string, error: unknown) => void;
 	// Realtime streams: a subject such as "change feed", never a payload.
 	onRealtimeError: (subject: string, error: unknown) => void;
+	// An IP lock started on a public auth route. Never the address.
+	onIpLocked: (route: "login" | "setup" | "signup", until: Date) => void;
 };
 
 export const buildApp = (config: Config, log: AppErrorLog) => {
@@ -73,6 +77,8 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 		accounts,
 		hasher: createArgon2PasswordHasher(),
 		tokens: createJwtTokenService(config.JWT_SECRET, config.ACCESS_TOKEN_TTL_SECONDS),
+		throttle: new PostgresLoginThrottle(pool),
+		onIpLocked: log.onIpLocked,
 		audit,
 		onAuditError: log.onAuditError,
 	});
@@ -129,6 +135,7 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 		onCallScheduleService: createOnCallScheduleService(schedules),
 		dashboardService: createDashboardService(dashboardDeps),
 		eventHub,
+		trustedProxyHops: config.TRUSTED_PROXY_HOPS,
 	});
 	return { app, pool, eventHub, feed };
 };
@@ -167,5 +174,10 @@ export const buildWorker = (config: Config, onError: (subject: string, error: un
 		purger: deliveries,
 		retentionMs: DELIVERY_RETENTION_MS,
 	});
-	return { processor, deliveryProcessor, purgeAudit, purgeDeliveries, pool };
+	// Spec: docs/features/login-rate-limiting.md.
+	const purgeThrottle = createAuditPurge({
+		purger: new PostgresLoginThrottle(pool),
+		retentionMs: THROTTLE_RETENTION_MS,
+	});
+	return { processor, deliveryProcessor, purgeAudit, purgeDeliveries, purgeThrottle, pool };
 };

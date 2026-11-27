@@ -25,6 +25,7 @@ import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAc
 import { InMemoryAlertRepository } from "../src/repository/alerts/inMemoryAlertRepository";
 import { InMemoryAlertSourceRepository } from "../src/repository/alerts/inMemoryAlertSourceRepository";
 import { InMemoryAuditStore } from "../src/repository/audit/inMemoryAuditStore";
+import { InMemoryLoginThrottle } from "../src/repository/auth/inMemoryLoginThrottle";
 import { InMemoryIncidentStatsReader } from "../src/repository/dashboard/inMemoryIncidentStatsReader";
 import { InMemoryChangeFeed } from "../src/repository/events/inMemoryChangeFeed";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
@@ -100,6 +101,9 @@ export const buildTestApp = (
 		channelNow?: () => Date;
 		alertNow?: () => Date;
 		dashboardDelayMs?: number;
+		// The throttle's clock. Spec: docs/features/login-rate-limiting.md.
+		authNow?: () => Date;
+		trustedProxyHops?: number;
 	} = {},
 ) => buildTestSystem(options).app;
 
@@ -112,6 +116,9 @@ export const buildTestSystem = (
 		channelNow?: () => Date;
 		alertNow?: () => Date;
 		dashboardDelayMs?: number;
+		// The throttle's clock. Spec: docs/features/login-rate-limiting.md.
+		authNow?: () => Date;
+		trustedProxyHops?: number;
 	} = {},
 ) => {
 	// One audit store for every repository, as Postgres has one audit_events table.
@@ -119,11 +126,14 @@ export const buildTestSystem = (
 	// One feed for every repository, as Postgres has one NOTIFY channel.
 	const feed = new InMemoryChangeFeed();
 	const accounts = new InMemoryAccountRepository(audit, feed);
+	const throttle = new InMemoryLoginThrottle();
 	const authService = createAuthService({
 		credentials: accounts,
 		accounts,
 		hasher: testHasher(),
 		tokens: createJwtTokenService(TEST_JWT_SECRET, 3600, options.tokenNowMs),
+		throttle,
+		now: options.authNow,
 		audit,
 	});
 	const secrets = createAesGcmSecretBox(TEST_ENCRYPTION_KEY);
@@ -190,6 +200,7 @@ export const buildTestSystem = (
 		onCallScheduleService: createOnCallScheduleService(schedules, options.alertNow),
 		dashboardService: createDashboardService(dashboardDeps),
 		eventHub,
+		trustedProxyHops: options.trustedProxyHops ?? 0,
 	});
 	const processor = createAlertProcessor({
 		queue,
@@ -220,6 +231,7 @@ export const buildTestSystem = (
 		feed,
 		eventHub,
 		realtimeErrors,
+		throttle,
 		schedules,
 		alerts,
 		queue,

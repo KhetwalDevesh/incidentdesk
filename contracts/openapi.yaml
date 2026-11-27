@@ -102,6 +102,7 @@ components:
             - CONFLICT
             - PAYLOAD_TOO_LARGE
             - VALIDATION_FAILED
+            - TOO_MANY_REQUESTS
             - INTERNAL
         detail:
           type: string
@@ -215,6 +216,7 @@ components:
             - member.removed
             - user.login_succeeded
             - user.login_failed
+            - user.login_locked
             - incident.created
             - incident.acknowledged
             - incident.resolved
@@ -1626,6 +1628,7 @@ paths:
               - member.removed
               - user.login_succeeded
               - user.login_failed
+              - user.login_locked
               - incident.created
               - incident.acknowledged
               - incident.resolved
@@ -1726,6 +1729,20 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "429":
+          description: Too many attempts from this email or address. Retry after the given
+            time
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Whole seconds until the lock ends
+              required: true
+              description: Whole seconds until the lock ends
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/auth/login:
     post:
       summary: Exchange email and password for a token
@@ -1753,6 +1770,20 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "429":
+          description: Too many attempts from this email or address. Retry after the given
+            time
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Whole seconds until the lock ends
+              required: true
+              description: Whole seconds until the lock ends
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/auth/setup-password:
     post:
       summary: Set a new member's password with a setup token
@@ -1776,6 +1807,20 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "422":
           description: Request body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: Too many attempts from this email or address. Retry after the given
+            time
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                description: Whole seconds until the lock ends
+              required: true
+              description: Whole seconds until the lock ends
           content:
             application/problem+json:
               schema:

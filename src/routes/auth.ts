@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import {
 	LoginRequestSchema,
 	SetupPasswordRequestSchema,
@@ -9,6 +9,12 @@ import { problemResponse, respond, validationError } from "../http/problem";
 import type { AppEnv } from "../http/types";
 import { toAccessTokenResponse } from "../mappers/auth";
 
+// The request id, and the caller's address for the throttle.
+const context = (c: Context<AppEnv>) => ({
+	requestId: c.get("requestId"),
+	clientIp: c.get("clientIp"),
+});
+
 // Public routes: they issue tokens, so app.ts mounts them before requireAuth.
 export const authRoutes = (service: AuthService) =>
 	new Hono<AppEnv>()
@@ -16,20 +22,20 @@ export const authRoutes = (service: AuthService) =>
 			const parsed = SignupRequestSchema.safeParse(await c.req.json().catch(() => null));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.signup(parsed.data, { requestId: c.get("requestId") });
+			const result = await service.signup(parsed.data, context(c));
 			return respond(c, result, (token) => c.json(toAccessTokenResponse(token), 201));
 		})
 		.post("/login", async (c) => {
 			const parsed = LoginRequestSchema.safeParse(await c.req.json().catch(() => null));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.login(parsed.data, { requestId: c.get("requestId") });
+			const result = await service.login(parsed.data, context(c));
 			return respond(c, result, (token) => c.json(toAccessTokenResponse(token)));
 		})
 		.post("/setup-password", async (c) => {
 			const parsed = SetupPasswordRequestSchema.safeParse(await c.req.json().catch(() => null));
 			if (!parsed.success) return problemResponse(c, validationError(parsed.error));
 
-			const result = await service.setupPassword(parsed.data, { requestId: c.get("requestId") });
+			const result = await service.setupPassword(parsed.data, context(c));
 			return respond(c, result, (token) => c.json(toAccessTokenResponse(token)));
 		});

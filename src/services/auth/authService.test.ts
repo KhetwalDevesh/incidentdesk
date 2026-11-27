@@ -4,6 +4,7 @@ import type { TokenService } from "../../domain/auth/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { InMemoryAccountRepository } from "../../repository/accounts/inMemoryAccountRepository";
 import { InMemoryAuditStore } from "../../repository/audit/inMemoryAuditStore";
+import { InMemoryLoginThrottle } from "../../repository/auth/inMemoryLoginThrottle";
 import { createAuthService } from "./authService";
 
 // Spec: docs/features/audit-log.md, "Sign-ins".
@@ -30,6 +31,7 @@ const setup = async (audit: AuditRecorder, onAuditError?: (id: string) => void) 
 		tokens: fakeTokens,
 		audit,
 		onAuditError,
+		throttle: new InMemoryLoginThrottle(),
 	});
 	const signedUp = await service.signup({
 		tenantName: "Acme",
@@ -116,5 +118,91 @@ describe("authService sign-in recording", () => {
 				details: { name: "Acme" },
 			},
 		]);
+	});
+});
+
+// Spec: docs/features/login-rate-limiting.md
+describe("authService throttling", () => {
+	const counting = () => {
+		const calls = { verify: 0, hash: 0, lookups: 0 };
+		const hasher = {
+			hash: async (password: string) => {
+				calls.hash += 1;
+				return `hashed:${password}`;
+			},
+			verify: async (hash: string, password: string) => {
+				calls.verify += 1;
+				return hash === `hashed:${password}`;
+			},
+		};
+		return { calls, hasher };
+	};
+
+	it("never looks up the user or checks the password while the email is locked", async () => {
+		const { calls, hasher } = counting();
+		const accounts = new InMemoryAccountRepository(new InMemoryAuditStore());
+		const recorded: AuditEntry[] = [];
+		const service = createAuthService({
+			credentials: {
+				...accounts,
+				findUserByEmail: async (email) => {
+					calls.lookups += 1;
+					return accounts.findUserByEmail(email);
+				},
+				createTenantWithAdmin: accounts.createTenantWithAdmin.bind(accounts),
+				redeemSetupToken: accounts.redeemSetupToken.bind(accounts),
+			},
+			accounts,
+			hasher,
+			tokens: fakeTokens,
+			audit: { record: async (entry) => void recorded.push(entry) },
+			throttle: new InMemoryLoginThrottle(),
+		});
+		await service.signup({ tenantName: "Acme", email: "ada@acme.example", password: PASSWORD });
+		for (let n = 0; n < 5; n++) {
+			await service.login({ email: "ada@acme.example", password: "wrong password here" });
+		}
+		const before = { ...calls };
+
+		const locked = await service.login(
+			{ email: "ada@acme.example", password: PASSWORD },
+			{ requestId: null, clientIp: "203.0.113.1" },
+		);
+
+		expect(locked).toMatchObject({
+			ok: false,
+			error: { code: "TOO_MANY_REQUESTS", retryAfterSeconds: 900 },
+		});
+		expect(calls).toEqual(before);
+		// The fifth failure started the lock: one entry, with no email or address.
+		const locks = recorded.filter((entry) => entry.action === "user.login_locked");
+		expect(locks).toHaveLength(1);
+		expect(locks[0]).toMatchObject({ actor: { type: "anonymous", id: null }, details: {} });
+		expect(JSON.stringify(locks)).not.toMatch(/ada@acme\.example|203\.0\.113/);
+	});
+
+	it("reports an IP lock by route and end time only", async () => {
+		const locked: [string, Date][] = [];
+		const now = new Date("2026-01-10T12:00:00Z");
+		const accounts = new InMemoryAccountRepository(new InMemoryAuditStore());
+		const service = createAuthService({
+			credentials: accounts,
+			accounts,
+			hasher: plainHasher,
+			tokens: fakeTokens,
+			audit: { record: async () => undefined },
+			throttle: new InMemoryLoginThrottle(),
+			now: () => now,
+			onIpLocked: (route, until) => locked.push([route, until]),
+		});
+
+		for (let n = 0; n < 30; n++) {
+			await service.login(
+				{ email: `user${n}@acme.example`, password: "wrong password here" },
+				{ requestId: null, clientIp: "203.0.113.1" },
+			);
+		}
+
+		expect(locked).toEqual([["login", new Date("2026-01-10T12:15:00Z")]]);
 	});
 });

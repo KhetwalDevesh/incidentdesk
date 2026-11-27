@@ -11,6 +11,7 @@ export const AUDIT_ACTIONS = [
 	"member.removed",
 	"user.login_succeeded",
 	"user.login_failed",
+	"user.login_locked",
 	"incident.created",
 	"incident.acknowledged",
 	"incident.resolved",

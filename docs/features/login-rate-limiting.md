@@ -1,6 +1,6 @@
 # Login rate limiting
 
-Status: Approved
+Status: Done
 
 Closes a security gap before Phase 5: today anyone can try passwords against `POST /v1/auth/login` as fast as the server answers.
 
@@ -82,6 +82,7 @@ Migration `0017_create_auth_throttle.sql`:
 - **`auth_throttle`** `(key, window_started_at, count, locked_until, updated_at)`, with primary key `key`. It is not tenant-owned: these routes run before any tenant is known, like the global email index on `users`.
   - Keys are `login:email:<sha256 of the email>`, `login:ip:<ip>`, `setup:ip:<ip>` and `signup:ip:<ip>`. Emails are stored only as a hash, so the table holds no email address.
   - Counting is one `INSERT … ON CONFLICT (key) DO UPDATE` statement. It starts a new window when the old one has passed, increments the count, and sets `locked_until` when the limit is reached. The row lock makes concurrent failures all count.
+  - It runs in a transaction that first reads the lock in force under `SELECT … FOR UPDATE`. That way exactly one of many concurrent events reports starting a lock, so `user.login_locked` is written once. Found while building: comparing timestamps alone reported a new lock for every event sharing a millisecond.
   - An index on `updated_at` serves the purge.
 - **The audit action CHECK gains `user.login_locked`** (expand only).
 - **Purge:** the worker deletes rows whose window and lock both ended more than a day ago, hourly, in batches, alongside the audit purge.
@@ -132,11 +133,11 @@ Code:
 
 ## Done when
 
-- [ ] Each rule counts, locks at its limit, and resets after its window, the same in memory and in Postgres, including concurrent failures (`tests/authThrottle.parity.test.ts`)
-- [ ] Login locks an email after 5 failures, and an IP after 30, with 429 and `Retry-After` for known and unknown emails alike. A success clears the email's count but not the IP's. A locked attempt never checks the password (`tests/auth.contract.test.ts`, `src/services/auth/authService.test.ts`)
-- [ ] Setup-password and signup lock by IP after 10 attempts (`tests/auth.contract.test.ts`)
-- [ ] The client IP comes from the socket, or from `X-Forwarded-For` only within `TRUSTED_PROXY_HOPS`, with IPv6 keyed by `/64` (`src/http/clientIp.test.ts`)
-- [ ] An email lock for a member writes `user.login_locked` with no email or IP in it (`tests/audit.contract.test.ts`)
-- [ ] The 429 reveals nothing about the account, and a spoofed `X-Forwarded-For` does not escape the IP limit (`tests/security.test.ts`, "login rate limiting")
-- [ ] Contract regenerated: `TOO_MANY_REQUESTS` and the 429 responses added, nothing removed
-- [ ] `pnpm check` passes
+- [x] Each rule counts, locks at its limit, and resets after its window, the same in memory and in Postgres, including concurrent failures (`tests/authThrottle.parity.test.ts`)
+- [x] Login locks an email after 5 failures, and an IP after 30, with 429 and `Retry-After` for known and unknown emails alike. A success clears the email's count but not the IP's. A locked attempt never checks the password (`tests/auth.contract.test.ts`, `src/services/auth/authService.test.ts`)
+- [x] Setup-password and signup lock by IP after 10 attempts (`tests/auth.contract.test.ts`)
+- [x] The client IP comes from the socket, or from `X-Forwarded-For` only within `TRUSTED_PROXY_HOPS`, with IPv6 keyed by `/64` (`src/http/clientIp.test.ts`)
+- [x] An email lock for a member writes `user.login_locked` with no email or IP in it (`tests/audit.contract.test.ts`)
+- [x] The 429 reveals nothing about the account, and a spoofed `X-Forwarded-For` does not escape the IP limit (`tests/security.test.ts`, "login rate limiting")
+- [x] Contract regenerated: `TOO_MANY_REQUESTS` and the 429 responses added, nothing removed
+- [x] `pnpm check` passes

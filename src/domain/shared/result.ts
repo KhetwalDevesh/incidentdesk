@@ -4,6 +4,8 @@ export type AppError = {
 	code: ErrorCode;
 	detail: string;
 	errors?: { path: string; message: string }[];
+	// Sent as the Retry-After header, in whole seconds.
+	retryAfterSeconds?: number;
 };
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: AppError };

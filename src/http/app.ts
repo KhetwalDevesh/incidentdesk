@@ -21,6 +21,7 @@ import { memberRoutes } from "../routes/members";
 import { notificationChannelRoutes } from "../routes/notificationChannels";
 import { onCallScheduleRoutes } from "../routes/onCallSchedules";
 import { type Authenticator, requireAuth } from "./auth";
+import { clientIp } from "./clientIp";
 import { problemResponse } from "./problem";
 import type { AppEnv } from "./types";
 
@@ -40,6 +41,8 @@ export type AppDeps = {
 	onCallScheduleService: OnCallScheduleService;
 	dashboardService: DashboardService;
 	eventHub: EventHub;
+	// Proxies in front of the API whose X-Forwarded-For entries are trusted. Default 0.
+	trustedProxyHops?: number;
 };
 
 export const createApp = ({
@@ -55,6 +58,7 @@ export const createApp = ({
 	onCallScheduleService,
 	dashboardService,
 	eventHub,
+	trustedProxyHops = 0,
 }: AppDeps) => {
 	const app = new Hono<AppEnv>();
 
@@ -75,6 +79,7 @@ export const createApp = ({
 	app.route("/", healthRoutes());
 	// Registered before requireAuth, so only these token-issuing routes are public.
 	// Every /v1 route registered after it requires a token.
+	app.use("/v1/auth/*", clientIp(trustedProxyHops));
 	app.route("/v1/auth", authRoutes(authService));
 	// Outside /v1 and before requireAuth: monitoring tools sign requests instead of holding a token.
 	app.route("/webhooks/alerts", alertWebhookRoutes(alertIngestService));

@@ -10,6 +10,8 @@ export const ERROR_CODES = {
 	CONFLICT: 409,
 	PAYLOAD_TOO_LARGE: 413,
 	VALIDATION_FAILED: 422,
+	// Spec: docs/features/login-rate-limiting.md. Sent with Retry-After.
+	TOO_MANY_REQUESTS: 429,
 	INTERNAL: 500,
 } as const;
 
