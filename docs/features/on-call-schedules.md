@@ -156,6 +156,7 @@ Migration `0013_remove_viewer_role.sql`, expand step:
 
 - Sets every `viewer` to `responder`, and writes a `member.role_changed` audit entry for each (`from: viewer`, `to: responder`). The actor is `anonymous`, the existing type for a change with no signed-in person, so no new value is added to the response enum `actor.type`.
 - The `users.role` CHECK still allows `viewer` in this release, because an instance on the old code could still write it while the deploy rolls out. Release 2 drops `viewer` from the CHECK in a new migration, once no row uses it. That is the contract step, noted in the header.
+- **Contract step done** in `0016_drop_viewer_role.sql`: it converts, with an audit entry, any viewer written during that rollout, then narrows the CHECK to `responder` and `admin`. The read-time fallback that mapped a stray `viewer` to responder is removed (`tests/migrate.test.ts`).
 
 Migration `0014_audit_on_call_actions.sql` widens the audit checks, expand only:
 

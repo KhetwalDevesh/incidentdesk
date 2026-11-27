@@ -24,6 +24,27 @@ const tableExists = async (table: string) =>
 	(await pool.query("SELECT to_regclass($1) AS found", [`${SCHEMA}.${table}`])).rows[0]?.found !==
 	null;
 
+// A directory holding the project's real migrations, up to and including `last`.
+const upTo = async (last: string) => {
+	const real = resolve(import.meta.dirname, "../db/migrations");
+	const files = (await readdir(real)).filter((name) => name.endsWith(".sql") && name <= last);
+	return migrationsDir(
+		Object.fromEntries(
+			await Promise.all(
+				files.map(async (name) => [name, await readFile(join(real, name), "utf8")]),
+			),
+		),
+	);
+};
+
+const TENANT = "00000000-0000-4000-8000-0000000000aa";
+
+const addUser = (id: string, role: string) =>
+	pool.query(
+		"INSERT INTO users (tenant_id, id, email, role, created_at) VALUES ($1, $2, $3, $4, now())",
+		[TENANT, id, `${id.slice(-4)}.${role}@acme.example`, role],
+	);
+
 describe("runMigrations", () => {
 	beforeEach(async () => {
 		await admin.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
@@ -62,34 +83,13 @@ describe("runMigrations", () => {
 
 	// Spec: docs/features/on-call-schedules.md. 0013 is the expand step that removes viewers.
 	it("turns every viewer into a responder, auditing each change with no actor", async () => {
-		const real = resolve(import.meta.dirname, "../db/migrations");
-		const files = (await readdir(real)).filter((name) => name.endsWith(".sql")).sort();
-		const upTo = async (last: string) =>
-			migrationsDir(
-				Object.fromEntries(
-					await Promise.all(
-						files
-							.filter((name) => name <= last)
-							.map(async (name) => [name, await readFile(join(real, name), "utf8")]),
-					),
-				),
-			);
 		await runMigrations(pool, await upTo("0012_create_on_call_schedules.sql"));
-		const tenant = "00000000-0000-4000-8000-0000000000aa";
 		await pool.query("INSERT INTO tenants (id, name, created_at) VALUES ($1, 'Acme', now())", [
-			tenant,
+			TENANT,
 		]);
-		const users: [string, string][] = [
-			["00000000-0000-4000-8000-000000000001", "viewer"],
-			["00000000-0000-4000-8000-000000000002", "responder"],
-			["00000000-0000-4000-8000-000000000003", "admin"],
-		];
-		for (const [id, role] of users) {
-			await pool.query(
-				"INSERT INTO users (tenant_id, id, email, role, created_at) VALUES ($1, $2, $3, $4, now())",
-				[tenant, id, `${role}@acme.example`, role],
-			);
-		}
+		await addUser("00000000-0000-4000-8000-000000000001", "viewer");
+		await addUser("00000000-0000-4000-8000-000000000002", "responder");
+		await addUser("00000000-0000-4000-8000-000000000003", "admin");
 
 		await runMigrations(pool, await upTo("0013_remove_viewer_role.sql"));
 
@@ -100,7 +100,7 @@ describe("runMigrations", () => {
 		);
 		expect(audit.rows).toEqual([
 			{
-				tenant_id: tenant,
+				tenant_id: TENANT,
 				actor_type: "anonymous",
 				actor_id: null,
 				action: "member.role_changed",
@@ -109,5 +109,44 @@ describe("runMigrations", () => {
 				details: { from: "viewer", to: "responder" },
 			},
 		]);
+	});
+
+	// Spec: docs/features/on-call-schedules.md. 0016 is the contract step.
+	it("converts a viewer written after 0013, then refuses the role for good", async () => {
+		await runMigrations(pool, await upTo("0013_remove_viewer_role.sql"));
+		await pool.query("INSERT INTO tenants (id, name, created_at) VALUES ($1, 'Acme', now())", [
+			TENANT,
+		]);
+		// As an instance still on the old code could have, while 0013's release rolled out.
+		await addUser("00000000-0000-4000-8000-000000000001", "viewer");
+		await addUser("00000000-0000-4000-8000-000000000002", "admin");
+
+		await runMigrations(pool, await upTo("0016_drop_viewer_role.sql"));
+
+		const roles = await pool.query("SELECT role FROM users ORDER BY id");
+		expect(roles.rows.map((row) => row.role)).toEqual(["responder", "admin"]);
+		const audit = await pool.query(
+			"SELECT actor_type, actor_id, action, resource_id, details FROM audit_events",
+		);
+		expect(audit.rows).toEqual([
+			{
+				actor_type: "anonymous",
+				actor_id: null,
+				action: "member.role_changed",
+				resource_id: "00000000-0000-4000-8000-000000000001",
+				details: { from: "viewer", to: "responder" },
+			},
+		]);
+		await expect(addUser("00000000-0000-4000-8000-000000000003", "viewer")).rejects.toThrow(
+			/users_role_check/,
+		);
+		await expect(
+			pool.query("UPDATE users SET role = 'viewer' WHERE id = $1", [
+				"00000000-0000-4000-8000-000000000002",
+			]),
+		).rejects.toThrow(/users_role_check/);
+		await expect(
+			addUser("00000000-0000-4000-8000-000000000004", "responder"),
+		).resolves.toBeDefined();
 	});
 });
