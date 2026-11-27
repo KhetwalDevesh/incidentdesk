@@ -1256,3 +1256,80 @@ describe("ai summaries", () => {
 		}
 	});
 });
+
+// Spec: docs/features/ai-postmortems.md
+describe("ai postmortems", () => {
+	it("never lets another tenant read, draft, save or publish an incident's postmortem", async () => {
+		const system = buildTestSystem();
+		const acme = await signup(system.app, "ada@acme.example", "Acme");
+		const globex = await signup(system.app, "hank@globex.example", "Globex");
+		const incident = IncidentSchema.parse(
+			await (await system.app.request("/v1/incidents", authed(acme, validBody))).json(),
+		);
+		await system.app.request(`/v1/incidents/${incident.id}/resolve`, authed(acme, {}));
+		await system.postmortemProcessor.process();
+		const path = `/v1/incidents/${incident.id}`;
+		await system.app.request(`${path}/postmortem`, {
+			...authed(acme, { body: "Acme's private postmortem." }),
+			method: "PUT",
+		});
+
+		const statuses = await Promise.all([
+			system.app.request(`${path}/postmortem`, authed(globex)),
+			system.app.request(`${path}/postmortem-drafts`, authed(globex)),
+			system.app.request(`${path}/postmortem-drafts`, authed(globex, {})),
+			system.app.request(`${path}/postmortem`, {
+				...authed(globex, { body: "Overwritten" }),
+				method: "PUT",
+			}),
+			system.app.request(`${path}/postmortem/publish`, authed(globex, {})),
+		]);
+
+		expect(statuses.map((res) => res.status)).toEqual([404, 404, 404, 404, 404]);
+		const after = (await (await system.app.request(`${path}/postmortem`, authed(acme))).json()) as {
+			body: string;
+			state: string;
+		};
+		expect(after).toMatchObject({ body: "Acme's private postmortem.", state: "draft" });
+	});
+
+	it("sends the model no names, emails or ids from the timeline, and nothing from another tenant", async () => {
+		const system = buildTestSystem();
+		const acme = await signup(system.app, "ada@acme.example", "Acme");
+		const globex = await signup(system.app, "hank@globex.example", "Globex");
+		const acmeIncident = IncidentSchema.parse(
+			await (
+				await system.app.request(
+					"/v1/incidents",
+					authed(acme, { title: "Checkout down, ask ada@acme.example", severity: "sev1" }),
+				)
+			).json(),
+		);
+		await system.app.request(`/v1/incidents/${acmeIncident.id}/acknowledge`, authed(acme, {}));
+		await system.app.request(`/v1/incidents/${acmeIncident.id}/resolve`, authed(acme, {}));
+		const globexIncident = IncidentSchema.parse(
+			await (
+				await system.app.request(
+					"/v1/incidents",
+					authed(globex, { title: "Globex billing down", severity: "sev2" }),
+				)
+			).json(),
+		);
+		await system.app.request(`/v1/incidents/${globexIncident.id}/resolve`, authed(globex, {}));
+		const acmeUser = (await system.accounts.findUserByEmail("ada@acme.example"))?.id ?? "missing";
+
+		await system.postmortemProcessor.process();
+
+		const postmortemPrompts = system.writer.prompts.filter(
+			(prompt) => prompt.schema.name === "incident_postmortem",
+		);
+		expect(postmortemPrompts).toHaveLength(2);
+		const acmePrompt = postmortemPrompts.find((prompt) => prompt.user.includes("Checkout"));
+		expect(acmePrompt?.user).toContain('"action": "acknowledged"');
+		expect(acmePrompt?.user).not.toContain("Globex");
+		const sent = JSON.stringify(postmortemPrompts);
+		for (const leaked of ["ada@acme.example", "hank@globex.example", acmeUser, acmeIncident.id]) {
+			expect(sent).not.toContain(leaked);
+		}
+	});
+});

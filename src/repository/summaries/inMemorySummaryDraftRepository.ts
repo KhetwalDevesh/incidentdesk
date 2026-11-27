@@ -9,6 +9,7 @@ import {
 	type SummaryDraftRepository,
 	utcDayStart,
 } from "../../domain/summaries/types";
+import { InMemoryDraftBudget } from "../ai/inMemoryDraftBudget";
 import { InMemoryChangeFeed } from "../events/inMemoryChangeFeed";
 
 const compareIds = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -18,7 +19,19 @@ const compareIds = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 export class InMemorySummaryDraftRepository implements SummaryDraftRepository {
 	private readonly drafts = new Map<string, SummaryDraft>();
 
-	constructor(readonly feed: InMemoryChangeFeed = new InMemoryChangeFeed()) {}
+	constructor(
+		readonly feed: InMemoryChangeFeed = new InMemoryChangeFeed(),
+		// Shared with postmortem drafts: one daily cap for both kinds.
+		readonly budget: InMemoryDraftBudget = new InMemoryDraftBudget(),
+	) {
+		budget.register(
+			(tenantId, since) =>
+				[...this.drafts.values()].filter(
+					(each) =>
+						each.tenantId === tenantId && each.createdAt >= since && each.state !== "skipped",
+				).length,
+		);
+	}
 
 	insertSync(tenantId: TenantId, draft: DraftRequest): SummaryDraft {
 		const owned = [...this.drafts.values()].filter((each) => each.tenantId === tenantId);
@@ -26,11 +39,8 @@ export class InMemorySummaryDraftRepository implements SummaryDraftRepository {
 			(each) => each.incidentId === draft.incidentId && each.state === "pending",
 		);
 		if (pending) return pending;
-		const dayStart = utcDayStart(draft.createdAt);
-		const counted = owned.filter(
-			(each) => each.createdAt >= dayStart && each.state !== "skipped",
-		).length;
-		const overCap = counted >= draft.dailyCap;
+		const overCap =
+			this.budget.usedSinceSync(tenantId, utcDayStart(draft.createdAt)) >= draft.dailyCap;
 		const stored: SummaryDraft = {
 			id: draft.id,
 			tenantId,

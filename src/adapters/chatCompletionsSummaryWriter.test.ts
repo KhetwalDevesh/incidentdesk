@@ -57,11 +57,20 @@ describe("chat completions summary writer", () => {
 				json_schema: { name: "incident_summary", strict: true, schema: prompt.schema.schema },
 			},
 			provider: { require_parameters: true, data_collection: "deny" },
+			max_tokens: 2000,
 		});
 		expect(JSON.stringify(body)).not.toContain("sk-or-test");
 	});
 
-	it("leaves the data policy out when it is relaxed for free development models", async () => {
+	it("uses the prompt's own output limit when it has one", async () => {
+		const { calls, fetchStub } = stub(() => completion("{}"));
+
+		await writerWith(fetchStub).write({ ...prompt, maxOutputTokens: 8000, timeoutMs: 100_000 });
+
+		expect(JSON.parse(String(calls[0]?.init.body)).max_tokens).toBe(8000);
+	});
+
+	it("leaves the data policy out when it is relaxed for free models", async () => {
 		const { calls, fetchStub } = stub(() => completion("{}"));
 
 		await writerWith(fetchStub, false).write(prompt);

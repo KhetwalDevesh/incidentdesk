@@ -187,6 +187,29 @@ describe("realtime events contract", () => {
 		await stream.close();
 	});
 
+	// Spec: docs/features/ai-postmortems.md
+	it("pushes a finished postmortem draft, and the postmortem when saved or published", async () => {
+		const stream = await openStream(system.app, admin);
+		await stream.next();
+		const incident = await openIncident();
+		await send("POST", `/v1/incidents/${incident.id}/resolve`, admin, {});
+
+		await system.postmortemProcessor.process();
+		const ready = (await stream.until("postmortem_draft.ready")).at(-1);
+		await send("PUT", `/v1/incidents/${incident.id}/postmortem`, admin, { body: "Written." });
+		const saved = (await stream.until("postmortem.updated")).at(-1);
+		await send("POST", `/v1/incidents/${incident.id}/postmortem/publish`, admin);
+		const published = (await stream.until("postmortem.updated")).at(-1);
+
+		checked(
+			[ready, saved, published].filter((event): event is ReceivedEvent => event !== undefined),
+		);
+		expect(ready?.data).toMatchObject({ incidentId: incident.id, draft: { state: "ready" } });
+		expect(saved?.data).toMatchObject({ postmortem: { body: "Written.", state: "draft" } });
+		expect(published?.data).toMatchObject({ postmortem: { state: "published" } });
+		await stream.close();
+	});
+
 	it("closes a removed member's stream at once, and tells the others to resync", async () => {
 		const grace = await join("grace@acme.example");
 		const graceStream = await openStream(system.app, grace.token);

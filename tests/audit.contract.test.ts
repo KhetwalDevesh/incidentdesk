@@ -522,4 +522,48 @@ describe("audit log contract", () => {
 			expect(JSON.stringify(entries)).not.toMatch(/Secret-ish|Edited by hand/);
 		});
 	});
+
+	// Spec: docs/features/ai-postmortems.md
+	describe("postmortems", () => {
+		it("records saving and publishing by ids, never the body", async () => {
+			const incident = await createIncident();
+			await system.app.request(`/v1/incidents/${incident.id}/resolve`, {
+				...authed("acme-responder"),
+				method: "POST",
+			});
+			await system.postmortemProcessor.process();
+			const drafts = (await (
+				await system.app.request(
+					`/v1/incidents/${incident.id}/postmortem-drafts`,
+					authed("acme-responder"),
+				)
+			).json()) as { items: { id: string }[] };
+			const put = (body: unknown) =>
+				system.app.request(`/v1/incidents/${incident.id}/postmortem`, {
+					...authed("acme-responder", body),
+					method: "PUT",
+				});
+
+			await put({ draftId: drafts.items[0]?.id });
+			await put({ body: "Confidential detail written by hand." });
+			await system.app.request(`/v1/incidents/${incident.id}/postmortem/publish`, {
+				...authed("acme-responder"),
+				method: "POST",
+			});
+
+			const entries = (await timeline(incident.id)).filter((event) =>
+				event.action.startsWith("postmortem."),
+			);
+			expect(entries).toMatchObject([
+				{
+					action: "postmortem.saved",
+					actor: { type: "user", id: "user-1" },
+					details: { source: "draft", draftId: drafts.items[0]?.id },
+				},
+				{ action: "postmortem.saved", details: { source: "manual", draftId: "none" } },
+				{ action: "postmortem.published", details: {} },
+			]);
+			expect(JSON.stringify(entries)).not.toMatch(/Confidential|Summary/);
+		});
+	});
 });

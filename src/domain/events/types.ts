@@ -1,6 +1,7 @@
 import type { Dashboard } from "../dashboard/types";
 import type { IncidentChanges, IncidentView } from "../incidents/types";
 import type { OnCallOverride, OnCallSchedule } from "../onCall/types";
+import type { Postmortem, PostmortemDraft } from "../postmortems/types";
 import type { Principal, TenantId } from "../shared/identity";
 import type { SummaryDraft } from "../summaries/types";
 
@@ -42,7 +43,10 @@ export type ChangeNotice =
 	// The members' streams close, and the tenant resyncs: their incidents were unassigned.
 	| { kind: "members_removed"; tenantId: TenantId; userIds: string[] }
 	// A draft finished: ready, failed or skipped. Spec: docs/features/ai-summaries.md.
-	| { kind: "summary_draft"; tenantId: TenantId; incidentId: string; id: string };
+	| { kind: "summary_draft"; tenantId: TenantId; incidentId: string; id: string }
+	// Spec: docs/features/ai-postmortems.md.
+	| { kind: "postmortem_draft"; tenantId: TenantId; incidentId: string; id: string }
+	| { kind: "postmortem"; tenantId: TenantId; incidentId: string };
 
 // What the feed hands the hub: a notice, or a warning that notices may have been missed.
 export type FeedItem = ChangeNotice | { kind: "resync" };
@@ -65,7 +69,9 @@ export type StreamEvent =
 	| { type: "on_call_schedule.deleted"; id: string }
 	| { type: "on_call_override.created"; scheduleId: string; override: OnCallOverride }
 	| { type: "on_call_override.deleted"; scheduleId: string; id: string }
-	| { type: "summary_draft.ready"; incidentId: string; draft: SummaryDraft };
+	| { type: "summary_draft.ready"; incidentId: string; draft: SummaryDraft }
+	| { type: "postmortem_draft.ready"; incidentId: string; draft: PostmortemDraft }
+	| { type: "postmortem.updated"; postmortem: Postmortem };
 
 // Where one stream's events go. `write` resolves once the event is sent; `close` ends the
 // stream for good.

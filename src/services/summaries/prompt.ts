@@ -54,12 +54,14 @@ export const buildPrompt = (
 	incident: Pick<Incident, "title" | "severity">,
 	alerts: Alert[],
 ): SummaryPrompt => {
-	const kept = alerts.slice(0, MAX_PROMPT_ALERTS);
+	// Redacted once, up front: the loop below only drops alerts.
+	const kept = alerts.slice(0, MAX_PROMPT_ALERTS).map(alertData);
+	const incidentData = { title: redactText(incident.title), severity: incident.severity };
 	const render = (count: number) => {
 		const data = {
-			incident: { title: redactText(incident.title), severity: incident.severity },
+			incident: incidentData,
 			// Oldest first, so the account reads in order.
-			alerts: kept.slice(0, count).map(alertData).reverse(),
+			alerts: kept.slice(0, count).reverse(),
 			omittedOlderAlerts: alerts.length - count,
 		};
 		return `Summarise this incident.\n\n<alert_data>\n${JSON.stringify(data, null, 1)}\n</alert_data>`;

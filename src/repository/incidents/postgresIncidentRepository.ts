@@ -18,6 +18,7 @@ import type { DraftRequest } from "../../domain/summaries/types";
 import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
 import { publishChange } from "../events/postgresChangePublisher";
 import { insertDeliveries } from "../notifications/postgresNotificationDeliveryRepository";
+import { insertPostmortemDraft } from "../postmortems/postgresPostmortemDraftRepository";
 import { insertDraft } from "../summaries/postgresSummaryDraftRepository";
 
 export const INCIDENT_COLUMNS =
@@ -177,6 +178,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 		changes: IncidentChanges,
 		audit: AuditEntry,
 		notice?: DeliveryNotice,
+		postmortemDraft?: DraftRequest,
 	): Promise<Incident | null> {
 		const keys = CHANGE_KEYS.filter((key) => changes[key] !== undefined);
 		const assignments = keys.map((key, index) => `${CHANGE_COLUMNS[key]} = $${index + 5}`);
@@ -190,6 +192,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			if (!rows[0]) return null;
 			await insertAuditEntries(client, [audit]);
 			if (notice) await insertDeliveries(client, tenantId, notice);
+			if (postmortemDraft) await insertPostmortemDraft(client, tenantId, postmortemDraft);
 			const event = transitionEvent(changes);
 			if (event) await publishChange(client, { kind: "incident", tenantId, id, event });
 			return toIncident(rows[0]);

@@ -4,6 +4,7 @@ import type { Dashboard } from "../../domain/dashboard/types";
 import type { StreamEvent, StreamSink } from "../../domain/events/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { OnCallOverride, OnCallSchedule } from "../../domain/onCall/types";
+import type { Postmortem, PostmortemDraft } from "../../domain/postmortems/types";
 import type { Principal, TenantId } from "../../domain/shared/identity";
 import type { SummaryDraft } from "../../domain/summaries/types";
 import { InMemoryChangeFeed } from "../../repository/events/inMemoryChangeFeed";
@@ -119,6 +120,18 @@ describe("event hub", () => {
 				findById: async (tenantId, id) => {
 					loads.push(`draft ${tenantId} ${id}`);
 					return { id, tenantId, incidentId: "i-1", state: "ready" } as SummaryDraft;
+				},
+			},
+			postmortemDrafts: {
+				findById: async (tenantId, id) => {
+					loads.push(`postmortem draft ${tenantId} ${id}`);
+					return { id, tenantId, incidentId: "i-1", state: "ready" } as PostmortemDraft;
+				},
+			},
+			postmortems: {
+				find: async (tenantId, incidentId) => {
+					loads.push(`postmortem ${tenantId} ${incidentId}`);
+					return { tenantId, incidentId, state: "published" } as Postmortem;
 				},
 			},
 			dashboard: async (tenantId) => {
@@ -276,6 +289,21 @@ describe("event hub", () => {
 			{ type: "incident.updated", incident: { id: "i-1" } },
 		]);
 		expect(types(grace).at(-1)).toBe("dashboard");
+	});
+
+	// Spec: docs/features/ai-postmortems.md.
+	it("sends a finished postmortem draft and a saved postmortem", async () => {
+		const grace = sink();
+		hub.connect(member("grace"), grace);
+
+		feed.publishSync({ kind: "postmortem_draft", tenantId: ACME, incidentId: "i-1", id: "p-1" });
+		feed.publishSync({ kind: "postmortem", tenantId: ACME, incidentId: "i-1" });
+		await flush();
+
+		expect(grace.events.slice(1)).toMatchObject([
+			{ type: "postmortem_draft.ready", incidentId: "i-1", draft: { id: "p-1" } },
+			{ type: "postmortem.updated", postmortem: { incidentId: "i-1", state: "published" } },
+		]);
 	});
 
 	it("closes a removed member's streams, and tells the rest of the tenant to resync", async () => {

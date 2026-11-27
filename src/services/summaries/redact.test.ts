@@ -43,6 +43,24 @@ describe("redactText", () => {
 	});
 });
 
+describe("redactText on hostile input", () => {
+	// Alert text is untrusted. A pattern that rescans from every position takes seconds on
+	// these; linear patterns take milliseconds. The bound is loose enough for a slow CI runner.
+	it.each([
+		["one long run of letters", "x".repeat(100_000)],
+		["letters and dots", "a.".repeat(50_000)],
+		["at signs", "a@".repeat(50_000)],
+		["scheme-like text", "a://".repeat(25_000)],
+		["mixed-case runs", "aB3".repeat(35_000)],
+	])("redacts %s in linear time", (_case, input) => {
+		const started = performance.now();
+
+		redactText(input);
+
+		expect(performance.now() - started).toBeLessThan(500);
+	});
+});
+
 describe("redactDetails", () => {
 	it("blanks credential-like keys whatever their value, and redacts the rest by pattern", () => {
 		expect(

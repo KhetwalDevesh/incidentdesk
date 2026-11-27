@@ -10,6 +10,7 @@ import {
 	type SummaryDraftRepository,
 	utcDayStart,
 } from "../../domain/summaries/types";
+import { draftsUsedSince, lockDraftBudget } from "../ai/postgresDraftBudget";
 import { inTransaction } from "../audit/postgresAuditRepository";
 import { publishChange } from "../events/postgresChangePublisher";
 
@@ -65,8 +66,9 @@ export const insertDraft = async (
 	tenantId: TenantId,
 	draft: DraftRequest,
 ): Promise<SummaryDraft> => {
-	// One tenant at a time, until commit, so concurrent requests cannot pass the daily cap.
-	await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`summary_drafts:${tenantId}`]);
+	// One tenant at a time, until commit, so concurrent requests cannot pass the daily cap,
+	// which postmortem drafts share.
+	await lockDraftBudget(client, tenantId);
 	const pending = await client.query<DraftRow>(
 		`SELECT ${COLUMNS} FROM incident_summary_drafts
 		WHERE tenant_id = $1 AND incident_id = $2 AND state = 'pending'`,
@@ -74,12 +76,8 @@ export const insertDraft = async (
 	);
 	if (pending.rows[0]) return toDraft(pending.rows[0]);
 
-	const counted = await client.query<{ count: number }>(
-		`SELECT count(*)::int AS count FROM incident_summary_drafts
-		WHERE tenant_id = $1 AND created_at >= $2 AND state <> 'skipped'`,
-		[tenantId, utcDayStart(draft.createdAt)],
-	);
-	const overCap = (counted.rows[0]?.count ?? 0) >= draft.dailyCap;
+	const overCap =
+		(await draftsUsedSince(client, tenantId, utcDayStart(draft.createdAt))) >= draft.dailyCap;
 	const { rows } = await client.query<DraftRow>(
 		`INSERT INTO incident_summary_drafts
 			(tenant_id, id, incident_id, state, failure_reason, requested_by, attempts, next_attempt_at,

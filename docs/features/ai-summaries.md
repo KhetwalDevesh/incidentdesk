@@ -12,7 +12,7 @@ Decided by the user:
 | What is sent to the AI | The incident's title and severity, and up to its 20 most recent alerts: title, severity, status, time received and details |
 | Confirming | Any member can accept a draft, edit its text first, and set the incident's severity (the suggested one or another). Any member can also edit the summary later |
 | Cost | At most 100 drafts per tenant per UTC day. Beyond that, drafts are skipped with a reason, and incidents work as normal |
-| Model | Open models through OpenRouter. Production: Qwen 3 (`qwen/qwen3-30b-a3b-instruct-2507`, paid). Development: the free `openrouter/free` router, since OpenRouter lists no free Qwen 3 model (checked during implementation; decided by the user). Not Claude, and nothing self-hosted |
+| Model | Free models through OpenRouter's `openrouter/free` router, in development **and production** (decided by the user while building `docs/features/ai-postmortems.md`). Qwen 3 (`qwen/qwen3-30b-a3b-instruct-2507`, paid) remains a one-setting option. Not Claude, and nothing self-hosted |
 
 ## Goal
 
@@ -52,11 +52,16 @@ Rules:
 
 - **Provider:** OpenRouter, a hosted gateway that runs open models on its providers' GPUs. Nothing is self-hosted: the worker sends one HTTPS request per draft, as it does for Slack.
 - **Protocol:** the OpenAI-compatible `POST {AI_BASE_URL}/chat/completions`, called with plain `fetch`. There is no SDK, so no new dependency. Any server that speaks this protocol works by changing settings, including Groq, or Ollama or vLLM if self-hosting is wanted later.
-- **Model** (decided by the user after checking OpenRouter's model list during implementation):
+- **Model** (decided by the user after checking OpenRouter's model list during implementation; production moved to the free router later, see below):
   - **Production:** `qwen/qwen3-30b-a3b-instruct-2507`, an open Qwen 3 instruct model (Apache 2.0). It supports strict JSON schemas, has a 262K context, and costs $0.10 per million input tokens and $0.30 per million output, so one draft (about 3,000 tokens in, 300 out) costs about $0.0004.
   - **Development:** `openrouter/free`, OpenRouter's router across its free models. It costs nothing, but the model can differ between requests, so draft quality varies. OpenRouter lists no free Qwen 3 model, and Qwen 2.5 7B, the first choice, is no longer offered.
   - **Caveat, found in the live check:** the free router may choose a free model that is not open source. One test request went to Baidu ERNIE 5.5 Flash. To keep development on an open model, pin a free open-weights one in `AI_MODEL` instead, such as `google/gemma-4-26b-a4b-it:free`, which was listed during implementation. It supports JSON mode but not strict schemas, so Zod catches what it gets wrong.
   - Both are just values of `AI_MODEL`: no code depends on which model answers.
+  - **Later decision: free in production as well.** The user chose `openrouter/free` for production too. What follows from that:
+    - **Data policy off.** `AI_DENY_DATA_COLLECTION=false` is required, because free models may have no provider that keeps no data; with it on, OpenRouter refuses the request (404). Production incident data, redacted, is then sent to free providers that may log it or train on it.
+    - **Account-wide free limits:** 50 requests a day for the whole OpenRouter account, across all tenants, or 1,000 a day once $10 of credits has been bought. Requests past it get 429 and become `provider_error`.
+    - **No guarantees:** the model can change per request, free models can be slow or withdrawn, and quality varies. Drafts are suggestions a person reviews, so the incident flow is unaffected.
+  - **Output limit:** 2,000 tokens, raised from 800 because free reasoning models spend tokens thinking before they answer. Only tokens used are billed.
 - **Structured output.**
   - **Requested schema:** the request asks for `response_format: { type: "json_schema", json_schema: { strict: true, schema } }` (`summary`, `suggestedSeverity`, `rationale`).
   - **Routing:** with `provider: { require_parameters: true }`, OpenRouter only uses providers that support it.

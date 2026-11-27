@@ -27,6 +27,8 @@ import { PostgresIncidentRepository } from "../repository/incidents/postgresInci
 import { PostgresNotificationChannelRepository } from "../repository/notifications/postgresNotificationChannelRepository";
 import { PostgresNotificationDeliveryRepository } from "../repository/notifications/postgresNotificationDeliveryRepository";
 import { PostgresOnCallRepository } from "../repository/onCall/postgresOnCallRepository";
+import { PostgresPostmortemDraftRepository } from "../repository/postmortems/postgresPostmortemDraftRepository";
+import { PostgresPostmortemRepository } from "../repository/postmortems/postgresPostmortemRepository";
 import { PostgresSummaryDraftRepository } from "../repository/summaries/postgresSummaryDraftRepository";
 import { createAlertIngestService } from "../services/alerts/alertIngestService";
 import { createAlertProcessor } from "../services/alerts/alertProcessor";
@@ -47,6 +49,8 @@ import { createDeliveryProcessor } from "../services/notifications/deliveryProce
 import { createNotificationChannelService } from "../services/notifications/notificationChannelService";
 import { createOnCallAssigner } from "../services/onCall/onCallAssigner";
 import { createOnCallScheduleService } from "../services/onCall/onCallScheduleService";
+import { createPostmortemProcessor } from "../services/postmortems/postmortemProcessor";
+import { createPostmortemService } from "../services/postmortems/postmortemService";
 import { createSummaryProcessor } from "../services/summaries/summaryProcessor";
 import { createSummaryService } from "../services/summaries/summaryService";
 
@@ -98,6 +102,8 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 	// One LISTEN connection per instance, outside the pool. Spec: docs/features/realtime-status.md.
 	const feed = createPgChangeFeed({ connectionString: config.DATABASE_URL }, log.onRealtimeError);
 	const drafts = new PostgresSummaryDraftRepository(pool);
+	const postmortemDrafts = new PostgresPostmortemDraftRepository(pool);
+	const postmortems = new PostgresPostmortemRepository(pool);
 	const views = createIncidentViews(accounts);
 	const eventHub = createEventHub({
 		feed,
@@ -105,6 +111,8 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 		views,
 		schedules,
 		drafts,
+		postmortemDrafts,
+		postmortems,
 		dashboard: (tenantId) => createDashboardBuilder(dashboardDeps)(tenantId, null),
 		onError: log.onRealtimeError,
 	});
@@ -120,7 +128,7 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 				queue: buildNotificationQueue(config),
 				onSendError: log.onDeliverySendError,
 			}),
-			summaries: { dailyCap: config.AI_DAILY_DRAFT_CAP },
+			aiDrafts: { dailyCap: config.AI_DAILY_DRAFT_CAP },
 		}),
 		memberService: createMemberService(accounts),
 		notificationChannelService: createNotificationChannelService({
@@ -149,6 +157,12 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 			views,
 			dailyCap: config.AI_DAILY_DRAFT_CAP,
 		}),
+		postmortemService: createPostmortemService({
+			incidents,
+			drafts: postmortemDrafts,
+			postmortems,
+			dailyCap: config.AI_DAILY_DRAFT_CAP,
+		}),
 		trustedProxyHops: config.TRUSTED_PROXY_HOPS,
 	});
 	return { app, pool, eventHub, feed };
@@ -172,22 +186,33 @@ export const buildWorker = (config: Config, onError: (subject: string, error: un
 			queue: notificationQueue,
 			onSendError: (deliveryId, error) => onError(`delivery ${deliveryId} send`, error),
 		}),
-		summaries: { dailyCap: config.AI_DAILY_DRAFT_CAP },
+		aiDrafts: { dailyCap: config.AI_DAILY_DRAFT_CAP },
 	});
-	// Spec: docs/features/ai-summaries.md. No key, no model calls: drafts are skipped.
+	// Spec: docs/features/ai-summaries.md and ai-postmortems.md. No key, no model calls:
+	// drafts are skipped.
+	const writer =
+		config.AI_API_KEY && config.AI_MODEL
+			? createChatCompletionsSummaryWriter({
+					baseUrl: config.AI_BASE_URL,
+					apiKey: config.AI_API_KEY,
+					model: config.AI_MODEL,
+					denyDataCollection: config.AI_DENY_DATA_COLLECTION,
+				})
+			: null;
+	const incidentReader = new PostgresIncidentRepository(pool);
 	const summaryProcessor = createSummaryProcessor({
 		drafts: new PostgresSummaryDraftRepository(pool),
-		incidents: new PostgresIncidentRepository(pool),
+		incidents: incidentReader,
 		alerts,
-		writer:
-			config.AI_API_KEY && config.AI_MODEL
-				? createChatCompletionsSummaryWriter({
-						baseUrl: config.AI_BASE_URL,
-						apiKey: config.AI_API_KEY,
-						model: config.AI_MODEL,
-						denyDataCollection: config.AI_DENY_DATA_COLLECTION,
-					})
-				: null,
+		writer,
+		onError,
+	});
+	const postmortemProcessor = createPostmortemProcessor({
+		drafts: new PostgresPostmortemDraftRepository(pool),
+		incidents: incidentReader,
+		alerts,
+		audit: new PostgresAuditRepository(pool),
+		writer,
 		onError,
 	});
 	const deliveryProcessor = createDeliveryProcessor({
@@ -214,6 +239,7 @@ export const buildWorker = (config: Config, onError: (subject: string, error: un
 		processor,
 		deliveryProcessor,
 		summaryProcessor,
+		postmortemProcessor,
 		purgeAudit,
 		purgeDeliveries,
 		purgeThrottle,

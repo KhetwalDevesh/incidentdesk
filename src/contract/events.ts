@@ -2,6 +2,7 @@ import { z } from "zod";
 import { DashboardSchema } from "./dashboard";
 import { IncidentSchema } from "./incidents";
 import { OnCallOverrideSchema, OnCallScheduleSchema } from "./onCall";
+import { PostmortemDraftSchema, PostmortemSchema } from "./postmortems";
 import { SummaryDraftSchema } from "./summaries";
 
 // Spec: docs/features/realtime-status.md. The data of each Server-Sent Event, by event name.
@@ -32,6 +33,9 @@ export const STREAM_EVENT_SCHEMAS = {
 	// Spec: docs/features/ai-summaries.md.
 	"incident.updated": IncidentEventSchema,
 	"summary_draft.ready": z.strictObject({ incidentId: z.uuid(), draft: SummaryDraftSchema }),
+	// Spec: docs/features/ai-postmortems.md.
+	"postmortem_draft.ready": z.strictObject({ incidentId: z.uuid(), draft: PostmortemDraftSchema }),
+	"postmortem.updated": z.strictObject({ postmortem: PostmortemSchema }),
 	dashboard: DashboardSchema,
 	"on_call_schedule.created": ScheduleEventSchema,
 	"on_call_schedule.updated": ScheduleEventSchema,
