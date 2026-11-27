@@ -210,6 +210,14 @@ registry.registerPath({
 	},
 });
 
+// Spec: docs/features/login-rate-limiting.md. The same answer for every limit and caller.
+const tooManyAttempts = {
+	...problem("Too many attempts from this email or address. Retry after the given time"),
+	headers: z.object({
+		"Retry-After": z.string().openapi({ description: "Whole seconds until the lock ends" }),
+	}),
+};
+
 // Public: these routes issue tokens, so they have no security requirement.
 const tokenPath = (
 	path: string,
@@ -227,6 +235,7 @@ const tokenPath = (
 			[success]: json(AccessTokenSchema, "An access token for the API"),
 			...errors,
 			422: problem("Request body failed validation"),
+			429: tooManyAttempts,
 		},
 	});
 

@@ -3,7 +3,7 @@ import { AccessTokenSchema } from "../src/contract/auth";
 import { ProblemSchema } from "../src/contract/common";
 import { IncidentSchema } from "../src/contract/incidents";
 import { MemberInviteSchema, MemberListSchema } from "../src/contract/members";
-import { authed, buildTestApp, post, signup } from "./helpers";
+import { authed, buildTestApp, buildTestSystem, post, signup } from "./helpers";
 
 const PASSWORD = "correct horse battery";
 
@@ -170,5 +170,140 @@ describe("auth and members contract", () => {
 		});
 
 		await expectProblem(res, 401, "UNAUTHENTICATED");
+	});
+});
+
+// Spec: docs/features/login-rate-limiting.md
+describe("login rate limiting", () => {
+	let app: ReturnType<typeof buildTestApp>;
+	let clock: Date;
+
+	// As a trusted proxy would send it: the client's address is the rightmost entry.
+	const from = (ip: string, body: unknown): RequestInit => {
+		const init = post(body);
+		return { ...init, headers: { ...(init.headers as object), "X-Forwarded-For": ip } };
+	};
+
+	const login = (email: string, password: string, ip = "203.0.113.1") =>
+		app.request("/v1/auth/login", from(ip, { email, password }));
+
+	const statuses = async (responses: (Response | Promise<Response>)[]) =>
+		(await Promise.all(responses)).map((res) => res.status);
+
+	const tooMany = async (res: Response, retryAfter: string) => {
+		expect(res.status).toBe(429);
+		expect(res.headers.get("Retry-After")).toBe(retryAfter);
+		const body = ProblemSchema.parse(await res.json());
+		expect(body).toMatchObject({
+			code: "TOO_MANY_REQUESTS",
+			status: 429,
+			detail: "Too many attempts. Try again later.",
+		});
+		return body;
+	};
+
+	const advance = (ms: number) => {
+		clock = new Date(clock.getTime() + ms);
+	};
+
+	beforeEach(async () => {
+		clock = new Date("2026-01-10T12:00:00Z");
+		app = buildTestSystem({ authNow: () => clock, trustedProxyHops: 1 }).app;
+		await app.request(
+			"/v1/auth/signup",
+			from("198.51.100.200", { tenantName: "Acme", email: "ada@acme.example", password: PASSWORD }),
+		);
+	});
+
+	it("locks an email after 5 failures, from any address, until 15 minutes pass", async () => {
+		const failures = [];
+		for (let n = 0; n < 5; n++) {
+			failures.push((await login("ada@acme.example", "wrong password!", `203.0.113.${n}`)).status);
+		}
+
+		expect(failures).toEqual([401, 401, 401, 401, 401]);
+		await tooMany(await login("ada@acme.example", "wrong password!", "203.0.113.50"), "900");
+		// Even the right password: a locked email is not checked at all.
+		await tooMany(await login("ada@acme.example", PASSWORD, "203.0.113.51"), "900");
+		advance(10 * 60_000);
+		await tooMany(await login("ada@acme.example", PASSWORD), "300");
+		advance(5 * 60_000);
+		expect((await login("ada@acme.example", PASSWORD)).status).toBe(200);
+	});
+
+	it("locks an unknown email exactly like a known one", async () => {
+		for (let n = 0; n < 5; n++) {
+			await login("ada@acme.example", "wrong password!", `203.0.113.${n}`);
+			await login("nobody@acme.example", "wrong password!", `203.0.113.${n}`);
+		}
+
+		const known = await tooMany(await login("ada@acme.example", PASSWORD, "203.0.113.9"), "900");
+		const unknown = await tooMany(
+			await login("nobody@acme.example", PASSWORD, "203.0.113.9"),
+			"900",
+		);
+		const { requestId: _known, ...knownRest } = known;
+		const { requestId: _unknown, ...unknownRest } = unknown;
+		expect(unknownRest).toEqual(knownRest);
+	});
+
+	it("clears an email's count on success", async () => {
+		for (let n = 0; n < 4; n++) await login("ada@acme.example", "wrong password!");
+		expect((await login("ada@acme.example", PASSWORD)).status).toBe(200);
+
+		const after = [];
+		for (let n = 0; n < 4; n++)
+			after.push((await login("ada@acme.example", "wrong password!")).status);
+
+		expect(after).toEqual([401, 401, 401, 401]);
+	});
+
+	it("locks an address after 30 failures across many emails, and a success does not reset it", async () => {
+		for (let n = 0; n < 29; n++) await login(`user${n}@acme.example`, "wrong password!");
+		expect((await login("ada@acme.example", PASSWORD)).status).toBe(200);
+		expect((await login("last@acme.example", "wrong password!")).status).toBe(401);
+
+		await tooMany(await login("someone@acme.example", "wrong password!"), "900");
+		await tooMany(await login("ada@acme.example", PASSWORD), "900");
+		expect((await login("ada@acme.example", PASSWORD, "203.0.113.99")).status).toBe(200);
+	});
+
+	it("locks setup-password by address after 10 bad tokens", async () => {
+		const setup = (token: string) =>
+			app.request("/v1/auth/setup-password", from("203.0.113.7", { token, password: PASSWORD }));
+
+		expect(await statuses(Array.from({ length: 10 }, (_, n) => setup(`guess-${n}`)))).toEqual(
+			Array.from({ length: 10 }, () => 401),
+		);
+		await tooMany(await setup("guess-11"), "900");
+	});
+
+	it("locks signup by address after 10 attempts, successful or not", async () => {
+		const signupFrom = (n: number) =>
+			app.request(
+				"/v1/auth/signup",
+				from("203.0.113.8", {
+					tenantName: `Tenant ${n}`,
+					// The first two share an email: the second fails with 409, and still counts.
+					email: `owner${Math.max(n, 1)}@example.com`,
+					password: PASSWORD,
+				}),
+			);
+
+		const results = [];
+		for (let n = 0; n < 10; n++) results.push((await signupFrom(n)).status);
+
+		expect(results).toEqual([201, 409, 201, 201, 201, 201, 201, 201, 201, 201]);
+		await tooMany(await signupFrom(10), "3600");
+	});
+
+	it("does not count requests that fail validation", async () => {
+		for (let n = 0; n < 10; n++) {
+			expect(
+				(await app.request("/v1/auth/login", from("203.0.113.1", { email: "x" }))).status,
+			).toBe(422);
+		}
+
+		expect((await login("ada@acme.example", PASSWORD)).status).toBe(200);
 	});
 });

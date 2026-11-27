@@ -24,6 +24,9 @@ export const problemResponse = (c: Context<AppEnv>, error: AppError) => {
 	};
 	return c.body(JSON.stringify(body), status as ContentfulStatusCode, {
 		"Content-Type": "application/problem+json",
+		...(error.retryAfterSeconds === undefined
+			? {}
+			: { "Retry-After": String(error.retryAfterSeconds) }),
 	});
 };
 

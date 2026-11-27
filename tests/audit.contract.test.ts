@@ -455,4 +455,30 @@ describe("audit log contract", () => {
 			expect(JSON.stringify(onCall)).not.toContain("@initech.example");
 		});
 	});
+
+	// Spec: docs/features/login-rate-limiting.md
+	describe("sign-in locks", () => {
+		it("records the lock of a member's email once, with no email or address", async () => {
+			const owner = await signup(system.app, "owner@initech.example", "Initech");
+			const fail = () =>
+				system.app.request(
+					"/v1/auth/login",
+					post({ email: "owner@initech.example", password: "a guessed password" }),
+				);
+
+			for (let n = 0; n < 7; n++) await fail();
+			// The audit write is not awaited by login, so let it land.
+			await new Promise((resolve) => setImmediate(resolve));
+
+			const locks = (await events(owner, "?action=user.login_locked")).map((event) => ({
+				actor: event.actor,
+				resource: event.resource.type,
+				details: event.details,
+			}));
+			expect(locks).toEqual([
+				{ actor: { type: "anonymous", id: null }, resource: "user", details: {} },
+			]);
+			expect(JSON.stringify(await events(owner, "?limit=100"))).not.toContain("initech.example");
+		});
+	});
 });

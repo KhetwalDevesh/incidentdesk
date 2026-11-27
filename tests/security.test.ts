@@ -512,7 +512,11 @@ describe("request ids", () => {
 			headers: { "X-Request-ID": "bad id\twith spaces" },
 		});
 
-		expect(res.headers.get("X-Request-ID")).not.toContain("bad");
+		// A fresh UUID. Not "does not contain bad": b, a and d are hex digits, so a random UUID
+		// contains "bad" about once in 125 runs.
+		const id = res.headers.get("X-Request-ID");
+		expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(id).not.toBe("bad id\twith spaces");
 	});
 });
 
@@ -1105,5 +1109,75 @@ describe("realtime", () => {
 		const res = await app.request(`/v1/events?token=${token}&access_token=${token}`);
 
 		expect(res.status).toBe(401);
+	});
+});
+
+// Spec: docs/features/login-rate-limiting.md
+describe("login rate limiting", () => {
+	it("answers a locked known email, unknown email and address identically", async () => {
+		const system = buildTestSystem({ trustedProxyHops: 1 });
+		await signup(system.app, "ada@acme.example", "Acme");
+		const login = (email: string, ip: string) =>
+			system.app.request("/v1/auth/login", {
+				...post({ email, password: "a wrong password" }),
+				headers: { "Content-Type": "application/json", "X-Forwarded-For": ip },
+			});
+		for (let n = 0; n < 5; n++) {
+			await login("ada@acme.example", `203.0.113.${n}`);
+			await login("nobody@acme.example", `203.0.113.${n}`);
+		}
+		for (let n = 0; n < 30; n++) await login(`spray${n}@acme.example`, "198.51.100.9");
+
+		const answers = await Promise.all([
+			login("ada@acme.example", "203.0.113.200"),
+			login("nobody@acme.example", "203.0.113.200"),
+			login("fresh@acme.example", "198.51.100.9"),
+		]);
+
+		const bodies = await Promise.all(
+			answers.map(async (res) => {
+				expect(res.status).toBe(429);
+				const { requestId: _ignored, ...rest } = ProblemSchema.parse(await res.json());
+				return { ...rest, retryAfter: res.headers.get("Retry-After") };
+			}),
+		);
+		expect(bodies[1]).toEqual(bodies[0]);
+		expect(bodies[2]).toEqual(bodies[0]);
+	});
+
+	it("does not let a client escape the address limit by writing its own X-Forwarded-For", async () => {
+		// One trusted proxy, which appends the real address 198.51.100.9 to whatever the client sent.
+		const system = buildTestSystem({ trustedProxyHops: 1 });
+		const attempt = (n: number) =>
+			system.app.request("/v1/auth/login", {
+				...post({ email: `spray${n}@acme.example`, password: "a wrong password" }),
+				headers: {
+					"Content-Type": "application/json",
+					"X-Forwarded-For": `10.${n}.0.1, 198.51.100.9`,
+				},
+			});
+
+		const statuses = [];
+		for (let n = 0; n < 31; n++) statuses.push((await attempt(n)).status);
+
+		expect(statuses.slice(0, 30).every((status) => status === 401)).toBe(true);
+		expect(statuses[30]).toBe(429);
+	});
+
+	it("ignores X-Forwarded-For entirely when no proxy is trusted", async () => {
+		const system = buildTestSystem();
+		for (let n = 0; n < 30; n++) {
+			await system.app.request("/v1/auth/login", {
+				...post({ email: `spray${n}@acme.example`, password: "a wrong password" }),
+				headers: { "Content-Type": "application/json", "X-Forwarded-For": `10.${n}.0.1` },
+			});
+		}
+
+		const res = await system.app.request("/v1/auth/login", {
+			...post({ email: "another@acme.example", password: "a wrong password" }),
+			headers: { "Content-Type": "application/json", "X-Forwarded-For": "10.99.0.1" },
+		});
+
+		expect(res.status).toBe(429);
 	});
 });

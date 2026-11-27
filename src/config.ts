@@ -40,6 +40,10 @@ const EnvSchema = DatabaseEnvSchema.extend({
 			}
 			return origins;
 		}),
+	// Load balancers or proxies in front of the API. Their X-Forwarded-For entries name the
+	// client; anything further left is the client's own claim and is ignored.
+	// Spec: docs/features/login-rate-limiting.md.
+	TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
 	// Set only for a local emulator such as LocalStack.
 	AWS_ENDPOINT_URL: z.url().optional(),
 });

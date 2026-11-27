@@ -29,6 +29,8 @@ export type AuditDetails = {
 	"member.removed": { role: string; status: string };
 	"user.login_succeeded": Record<string, never>;
 	"user.login_failed": Record<string, never>;
+	// Never the email or the IP. Spec: docs/features/login-rate-limiting.md.
+	"user.login_locked": Record<string, never>;
 	"incident.created": { title: string; severity: string };
 	"incident.acknowledged": Record<string, never>;
 	"incident.resolved": Record<string, never>;

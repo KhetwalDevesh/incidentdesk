@@ -19,6 +19,9 @@ const { app, pool, eventHub, feed } = buildApp(config, {
 	onAuditError: (entryId, error) =>
 		console.error(`Audit entry ${entryId} was not recorded:`, message(error)),
 	onRealtimeError: (subject, error) => console.error(`Realtime ${subject} failed:`, message(error)),
+	// The route and lock end only: never the address.
+	onIpLocked: (route, until) =>
+		console.warn(`Locked an IP on ${route} until ${until.toISOString()} after repeated attempts`),
 });
 
 // An idle client can drop, for example when Postgres restarts. Without a listener that crashes the process.
