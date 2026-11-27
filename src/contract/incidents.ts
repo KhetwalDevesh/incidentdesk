@@ -44,6 +44,16 @@ export const IncidentSchema = z
 		lastAlertAt: z.iso.datetime().nullable(),
 		// Who owns it. See docs/features/on-call-schedules.md.
 		assignee: z.strictObject({ id: z.uuid(), email: z.string() }).nullable(),
+		// Written or accepted by a member. See docs/features/ai-summaries.md.
+		summary: z
+			.strictObject({
+				text: z.string(),
+				updatedAt: z.iso.datetime(),
+				updatedBy: z.string(),
+				// The AI draft it was accepted from, or null when written by hand.
+				draftId: z.uuid().nullable(),
+			})
+			.nullable(),
 	})
 	.openapi("Incident");
 

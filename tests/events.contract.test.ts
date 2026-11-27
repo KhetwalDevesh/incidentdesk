@@ -162,6 +162,31 @@ describe("realtime events contract", () => {
 		await stream.close();
 	});
 
+	// Spec: docs/features/ai-summaries.md
+	it("pushes a finished summary draft, and the incident when its summary changes", async () => {
+		const stream = await openStream(system.app, admin);
+		await stream.next();
+		const incident = await openIncident();
+
+		await system.summaryProcessor.process();
+		const ready = (await stream.until("summary_draft.ready")).at(-1);
+		await send("PUT", `/v1/incidents/${incident.id}/summary`, admin, {
+			text: "Checkout is slow.",
+			severity: "sev2",
+		});
+		const updated = (await stream.until("incident.updated")).at(-1);
+
+		checked([ready, updated].filter((event): event is ReceivedEvent => event !== undefined));
+		expect(ready?.data).toMatchObject({
+			incidentId: incident.id,
+			draft: { state: "ready", model: "test/fake-model" },
+		});
+		expect(updated?.data).toMatchObject({
+			incident: { id: incident.id, severity: "sev2", summary: { text: "Checkout is slow." } },
+		});
+		await stream.close();
+	});
+
 	it("closes a removed member's stream at once, and tells the others to resync", async () => {
 		const grace = await join("grace@acme.example");
 		const graceStream = await openStream(system.app, grace.token);

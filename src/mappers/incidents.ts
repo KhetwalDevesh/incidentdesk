@@ -14,4 +14,12 @@ export const toIncidentResponse = (incident: IncidentView): IncidentResponse => 
 	alertCount: incident.alertCount,
 	lastAlertAt: incident.lastAlertAt?.toISOString() ?? null,
 	assignee: incident.assignee ? { id: incident.assignee.id, email: incident.assignee.email } : null,
+	summary: incident.summary
+		? {
+				text: incident.summary.text,
+				updatedAt: incident.summary.updatedAt.toISOString(),
+				updatedBy: incident.summary.updatedBy,
+				draftId: incident.summary.draftId,
+			}
+		: null,
 });

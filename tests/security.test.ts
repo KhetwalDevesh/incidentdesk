@@ -1181,3 +1181,78 @@ describe("login rate limiting", () => {
 		expect(res.status).toBe(429);
 	});
 });
+
+// Spec: docs/features/ai-summaries.md
+describe("ai summaries", () => {
+	it("never lets another tenant read, request or accept an incident's drafts, or set its summary", async () => {
+		const system = buildTestSystem();
+		const acme = await signup(system.app, "ada@acme.example", "Acme");
+		const globex = await signup(system.app, "hank@globex.example", "Globex");
+		const incident = IncidentSchema.parse(
+			await (await system.app.request("/v1/incidents", authed(acme, validBody))).json(),
+		);
+		await system.summaryProcessor.process();
+		const globexIncident = IncidentSchema.parse(
+			await (await system.app.request("/v1/incidents", authed(globex, validBody))).json(),
+		);
+		const path = `/v1/incidents/${incident.id}`;
+		const acmeDrafts = (await (
+			await system.app.request(`${path}/summary-drafts`, authed(acme))
+		).json()) as { items: { id: string }[] };
+		const put = (token: string, incidentId: string, body: unknown) =>
+			system.app.request(`/v1/incidents/${incidentId}/summary`, {
+				...authed(token, body),
+				method: "PUT",
+			});
+
+		const statuses = await Promise.all([
+			system.app.request(`${path}/summary-drafts`, authed(globex)),
+			system.app.request(`${path}/summary-drafts`, authed(globex, {})),
+			put(globex, incident.id, { text: "Hijacked" }),
+			// Globex's own incident, but Acme's draft id.
+			put(globex, globexIncident.id, { text: "Copied", draftId: acmeDrafts.items[0]?.id }),
+		]);
+
+		expect(statuses.map((res) => res.status)).toEqual([404, 404, 404, 404]);
+		const after = IncidentSchema.parse(await (await system.app.request(path, authed(acme))).json());
+		expect(after.summary).toBeNull();
+	});
+
+	it("sends the model nothing from another tenant, and no emails, tokens or ids", async () => {
+		const system = buildTestSystem();
+		const acme = await signup(system.app, "ada@acme.example", "Acme");
+		const globex = await signup(system.app, "hank@globex.example", "Globex");
+		const { sourceId, secret } = await addAlertSource(system.app, acme);
+		await system.app.request(
+			`/webhooks/alerts/${sourceId}`,
+			signedAlert(secret, {
+				dedupKey: "checkout",
+				title: "Checkout down for grace@acme.example",
+				severity: "sev1",
+				details: { api_key: "live-key-123", owner: "ops@acme.example" },
+			}),
+		);
+		await system.processor.processMessages();
+		await system.app.request(
+			"/v1/incidents",
+			authed(globex, { title: "Globex billing is down", severity: "sev1" }),
+		);
+
+		await system.summaryProcessor.process();
+
+		const sent = JSON.stringify(system.writer.prompts);
+		expect(system.writer.prompts).toHaveLength(2);
+		const acmePrompt = system.writer.prompts.find((prompt) => prompt.user.includes("Checkout"));
+		expect(acmePrompt?.user).not.toContain("Globex");
+		for (const leaked of [
+			"grace@acme.example",
+			"ops@acme.example",
+			"ada@acme.example",
+			"live-key-123",
+			sourceId,
+			secret,
+		]) {
+			expect(sent).not.toContain(leaked);
+		}
+	});
+});

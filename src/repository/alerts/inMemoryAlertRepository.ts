@@ -12,6 +12,7 @@ import type { AuditEntry } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
+import type { DraftRequest } from "../../domain/summaries/types";
 import type { InMemoryIncidentRepository } from "../incidents/inMemoryIncidentRepository";
 
 const compareIds = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -77,6 +78,7 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 		processedAt: Date,
 		audit: (outcome: GroupingOutcome) => AuditEntry[],
 		notice?: (outcome: GroupingOutcome) => DeliveryNotice | null,
+		draft?: (outcome: GroupingOutcome) => DraftRequest | null,
 	): Promise<{ incidentId: IncidentId | null } | null> {
 		const alert = this.alerts.get(alertId);
 		if (alert?.tenantId !== tenantId || alert.state !== "pending") return null;
@@ -90,6 +92,7 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 		const outcome = { incidentId, opened: !existing && candidate !== null };
 		const entries = audit(outcome);
 		const deliveries = notice?.(outcome) ?? null;
+		const summary = draft?.(outcome) ?? null;
 		this.incidents.audit.checkSync(entries);
 		if (existing) {
 			this.incidents.putSync({
@@ -105,6 +108,7 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 		}
 		this.incidents.audit.appendSync(entries);
 		if (deliveries) this.incidents.deliveries.insertSync(tenantId, deliveries);
+		if (summary) this.incidents.drafts.insertSync(tenantId, summary);
 		if (outcome.opened && incidentId) {
 			this.incidents.feed.publishSync({
 				kind: "incident",
@@ -122,6 +126,17 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 			processedAt,
 		});
 		return { incidentId };
+	}
+
+	async listForIncident(
+		tenantId: TenantId,
+		incidentId: IncidentId,
+		limit: number,
+	): Promise<Alert[]> {
+		return [...this.alerts.values()]
+			.filter((alert) => alert.tenantId === tenantId && alert.incidentId === incidentId)
+			.sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime() || compareIds(a.id, b.id))
+			.slice(0, limit);
 	}
 
 	async fail(

@@ -153,6 +153,7 @@ describe("incidentService on an assigned incident", () => {
 			findById: (...args) => repository.findById(...args),
 			list: (...args) => repository.list(...args),
 			reassign: (...args) => repository.reassign(...args),
+			setSummary: (...args) => repository.setSummary(...args),
 			update: async (...args) => {
 				await repository.reassign(
 					tenant,
@@ -314,6 +315,7 @@ describe("incidentService.resolve", () => {
 			findById: (...args) => repository.findById(...args),
 			list: (...args) => repository.list(...args),
 			reassign: (...args) => repository.reassign(...args),
+			setSummary: (...args) => repository.setSummary(...args),
 			update: async (...args) => {
 				await repository.update(
 					tenant,

@@ -2,6 +2,7 @@ import type { Dashboard } from "../dashboard/types";
 import type { IncidentChanges, IncidentView } from "../incidents/types";
 import type { OnCallOverride, OnCallSchedule } from "../onCall/types";
 import type { Principal, TenantId } from "../shared/identity";
+import type { SummaryDraft } from "../summaries/types";
 
 // Spec: docs/features/realtime-status.md
 
@@ -9,7 +10,9 @@ export type IncidentChange =
 	| "incident.opened"
 	| "incident.acknowledged"
 	| "incident.resolved"
-	| "incident.reassigned";
+	| "incident.reassigned"
+	// Its summary or severity changed. Spec: docs/features/ai-summaries.md.
+	| "incident.updated";
 
 // The realtime event an incident update makes, if any.
 export const transitionEvent = (changes: IncidentChanges): IncidentChange | null =>
@@ -37,7 +40,9 @@ export type ChangeNotice =
 			event: "on_call_override.created" | "on_call_override.deleted";
 	  }
 	// The members' streams close, and the tenant resyncs: their incidents were unassigned.
-	| { kind: "members_removed"; tenantId: TenantId; userIds: string[] };
+	| { kind: "members_removed"; tenantId: TenantId; userIds: string[] }
+	// A draft finished: ready, failed or skipped. Spec: docs/features/ai-summaries.md.
+	| { kind: "summary_draft"; tenantId: TenantId; incidentId: string; id: string };
 
 // What the feed hands the hub: a notice, or a warning that notices may have been missed.
 export type FeedItem = ChangeNotice | { kind: "resync" };
@@ -59,7 +64,8 @@ export type StreamEvent =
 	  }
 	| { type: "on_call_schedule.deleted"; id: string }
 	| { type: "on_call_override.created"; scheduleId: string; override: OnCallOverride }
-	| { type: "on_call_override.deleted"; scheduleId: string; id: string };
+	| { type: "on_call_override.deleted"; scheduleId: string; id: string }
+	| { type: "summary_draft.ready"; incidentId: string; draft: SummaryDraft };
 
 // Where one stream's events go. `write` resolves once the event is sent; `close` ends the
 // stream for good.

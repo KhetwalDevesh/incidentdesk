@@ -10,15 +10,18 @@ import type {
 	IncidentPage,
 	IncidentRepository,
 	ReassignOutcome,
+	SummaryChange,
 } from "../../domain/incidents/types";
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
+import type { DraftRequest } from "../../domain/summaries/types";
 import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
 import { publishChange } from "../events/postgresChangePublisher";
 import { insertDeliveries } from "../notifications/postgresNotificationDeliveryRepository";
+import { insertDraft } from "../summaries/postgresSummaryDraftRepository";
 
 export const INCIDENT_COLUMNS =
-	"id, tenant_id, title, severity, status, created_at, created_by, acknowledged_at, acknowledged_by, resolved_at, resolved_by, alert_source_id, dedup_key, alert_count, last_alert_at, assignee_id, assignment_count";
+	"id, tenant_id, title, severity, status, created_at, created_by, acknowledged_at, acknowledged_by, resolved_at, resolved_by, alert_source_id, dedup_key, alert_count, last_alert_at, assignee_id, assignment_count, summary, summary_updated_at, summary_updated_by, summary_draft_id";
 
 export type IncidentRow = {
 	id: string;
@@ -38,6 +41,10 @@ export type IncidentRow = {
 	last_alert_at: Date | null;
 	assignee_id: string | null;
 	assignment_count: number;
+	summary: string | null;
+	summary_updated_at: Date | null;
+	summary_updated_by: string | null;
+	summary_draft_id: string | null;
 };
 
 export const toIncident = (row: IncidentRow): Incident => ({
@@ -58,6 +65,15 @@ export const toIncident = (row: IncidentRow): Incident => ({
 	lastAlertAt: row.last_alert_at,
 	assigneeId: row.assignee_id,
 	assignmentCount: row.assignment_count,
+	summary:
+		row.summary !== null && row.summary_updated_at !== null && row.summary_updated_by !== null
+			? {
+					text: row.summary,
+					updatedAt: row.summary_updated_at,
+					updatedBy: row.summary_updated_by,
+					draftId: row.summary_draft_id,
+				}
+			: null,
 });
 
 // The values for INCIDENT_COLUMNS, in order.
@@ -79,10 +95,14 @@ export const incidentValues = (tenantId: TenantId, incident: Omit<Incident, "ten
 	incident.lastAlertAt,
 	incident.assigneeId,
 	incident.assignmentCount,
+	incident.summary?.text ?? null,
+	incident.summary?.updatedAt ?? null,
+	incident.summary?.updatedBy ?? null,
+	incident.summary?.draftId ?? null,
 ];
 
-// The placeholders for INCIDENT_COLUMNS: $1 to $17.
-export const INCIDENT_PLACEHOLDERS = Array.from({ length: 17 }, (_, index) => `$${index + 1}`).join(
+// The placeholders for INCIDENT_COLUMNS: $1 to $21.
+export const INCIDENT_PLACEHOLDERS = Array.from({ length: 21 }, (_, index) => `$${index + 1}`).join(
 	", ",
 );
 
@@ -106,6 +126,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 		incident: Omit<Incident, "tenantId">,
 		audit: AuditEntry[],
 		notice?: DeliveryNotice,
+		draft?: DraftRequest,
 	): Promise<Incident> {
 		return inTransaction(this.pool, async (client) => {
 			const { rows } = await client.query<IncidentRow>(
@@ -114,6 +135,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			);
 			await insertAuditEntries(client, audit);
 			if (notice) await insertDeliveries(client, tenantId, notice);
+			if (draft) await insertDraft(client, tenantId, draft);
 			await publishChange(client, {
 				kind: "incident",
 				tenantId,
@@ -170,6 +192,37 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			if (notice) await insertDeliveries(client, tenantId, notice);
 			const event = transitionEvent(changes);
 			if (event) await publishChange(client, { kind: "incident", tenantId, id, event });
+			return toIncident(rows[0]);
+		});
+	}
+
+	async setSummary(
+		tenantId: TenantId,
+		id: IncidentId,
+		{ summary, severity }: SummaryChange,
+		audit: AuditEntry[],
+	): Promise<Incident | null> {
+		return inTransaction(this.pool, async (client) => {
+			const { rows } = await client.query<IncidentRow>(
+				`UPDATE incidents SET summary = $3, summary_updated_at = $4, summary_updated_by = $5,
+					summary_draft_id = $6, severity = COALESCE($7, severity)
+				WHERE tenant_id = $1 AND id = $2
+					AND ($7::text IS NULL OR (status <> 'resolved' AND severity = $8))
+				RETURNING ${INCIDENT_COLUMNS}`,
+				[
+					tenantId,
+					id,
+					summary.text,
+					summary.updatedAt,
+					summary.updatedBy,
+					summary.draftId,
+					severity?.to ?? null,
+					severity?.from ?? null,
+				],
+			);
+			if (!rows[0]) return null;
+			await insertAuditEntries(client, audit);
+			await publishChange(client, { kind: "incident", tenantId, id, event: "incident.updated" });
 			return toIncident(rows[0]);
 		});
 	}

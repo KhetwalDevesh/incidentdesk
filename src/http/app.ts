@@ -8,6 +8,7 @@ import type { EventHub } from "../domain/events/types";
 import type { IncidentService } from "../domain/incidents/types";
 import type { NotificationChannelService } from "../domain/notifications/types";
 import type { OnCallScheduleService } from "../domain/onCall/types";
+import type { SummaryService } from "../domain/summaries/types";
 import { alertSourceRoutes } from "../routes/alertSources";
 import { alertRoutes } from "../routes/alerts";
 import { alertWebhookRoutes } from "../routes/alertWebhooks";
@@ -20,6 +21,7 @@ import { incidentRoutes } from "../routes/incidents";
 import { memberRoutes } from "../routes/members";
 import { notificationChannelRoutes } from "../routes/notificationChannels";
 import { onCallScheduleRoutes } from "../routes/onCallSchedules";
+import { summaryRoutes } from "../routes/summaries";
 import { type Authenticator, requireAuth } from "./auth";
 import { clientIp } from "./clientIp";
 import { problemResponse } from "./problem";
@@ -41,6 +43,7 @@ export type AppDeps = {
 	onCallScheduleService: OnCallScheduleService;
 	dashboardService: DashboardService;
 	eventHub: EventHub;
+	summaryService: SummaryService;
 	// Proxies in front of the API whose X-Forwarded-For entries are trusted. Default 0.
 	trustedProxyHops?: number;
 };
@@ -58,6 +61,7 @@ export const createApp = ({
 	onCallScheduleService,
 	dashboardService,
 	eventHub,
+	summaryService,
 	trustedProxyHops = 0,
 }: AppDeps) => {
 	const app = new Hono<AppEnv>();
@@ -85,6 +89,8 @@ export const createApp = ({
 	app.route("/webhooks/alerts", alertWebhookRoutes(alertIngestService));
 	app.use("/v1/*", requireAuth(authenticate));
 	app.route("/v1/incidents", incidentRoutes(incidentService));
+	// /v1/incidents/{id}/summary-drafts and /v1/incidents/{id}/summary.
+	app.route("/v1/incidents", summaryRoutes(summaryService));
 	app.route("/v1/members", memberRoutes(memberService));
 	app.route("/v1/notification-channels", notificationChannelRoutes(notificationChannelService));
 	app.route("/v1/alert-sources", alertSourceRoutes(alertSourceService));

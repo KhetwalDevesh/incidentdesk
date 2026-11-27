@@ -168,6 +168,7 @@ describe.each([
 		lastAlertAt: alert.receivedAt,
 		assigneeId: null,
 		assignmentCount: 0,
+		summary: null,
 	});
 
 	describe("sources", () => {
@@ -329,6 +330,7 @@ describe.each([
 				lastAlertAt: at(2000),
 				assigneeId: null,
 				assignmentCount: 0,
+				summary: null,
 			});
 			const page = await stores.alerts.list(acme, { limit: 10, offset: 0 });
 			expect(page.items.every((alert) => alert.state === "processed")).toBe(true);

@@ -69,6 +69,29 @@ components:
             - id
             - email
           additionalProperties: false
+        summary:
+          type:
+            - object
+            - "null"
+          properties:
+            text:
+              type: string
+            updatedAt:
+              type: string
+              format: date-time
+            updatedBy:
+              type: string
+            draftId:
+              type:
+                - string
+                - "null"
+              format: uuid
+          required:
+            - text
+            - updatedAt
+            - updatedBy
+            - draftId
+          additionalProperties: false
       required:
         - id
         - title
@@ -81,6 +104,7 @@ components:
         - alertCount
         - lastAlertAt
         - assignee
+        - summary
       additionalProperties: false
     Problem:
       type: object
@@ -178,6 +202,119 @@ components:
       required:
         - assigneeId
       additionalProperties: false
+    SummaryDraft:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        incidentId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+            - pending
+            - ready
+            - failed
+            - skipped
+        summary:
+          type:
+            - string
+            - "null"
+        suggestedSeverity:
+          type:
+            - string
+            - "null"
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+            - null
+        rationale:
+          type:
+            - string
+            - "null"
+        model:
+          type:
+            - string
+            - "null"
+        failureReason:
+          type:
+            - string
+            - "null"
+          enum:
+            - provider_error
+            - invalid_output
+            - over_daily_cap
+            - ai_disabled
+            - null
+        requestedBy:
+          type:
+            - string
+            - "null"
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+      required:
+        - id
+        - incidentId
+        - state
+        - summary
+        - suggestedSeverity
+        - rationale
+        - model
+        - failureReason
+        - requestedBy
+        - createdAt
+        - completedAt
+      additionalProperties: false
+      description: An AI suggestion. It changes nothing until a member accepts it.
+    SummaryDraftList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SummaryDraft"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      additionalProperties: false
+    SetSummaryRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        severity:
+          type: string
+          enum:
+            - sev1
+            - sev2
+            - sev3
+            - sev4
+        draftId:
+          type: string
+          format: uuid
+      required:
+        - text
+      additionalProperties: false
     AuditEventList:
       type: object
       properties:
@@ -221,6 +358,8 @@ components:
             - incident.acknowledged
             - incident.resolved
             - incident.assigned
+            - incident.summary_set
+            - incident.severity_changed
             - alert.grouped
             - alert_source.created
             - alert_source.updated
@@ -1541,6 +1680,148 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/summary-drafts:
+    post:
+      summary: Ask the AI for a fresh summary draft
+      description: Returns the incident's pending draft if it has one. The draft is
+        written in the background, and stays a suggestion until a member accepts
+        it. Over the tenant's daily cap, the draft comes back skipped.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      responses:
+        "202":
+          description: The queued, pending or skipped draft
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SummaryDraft"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id is not a UUID
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      summary: List an incident's summary drafts, newest first
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type:
+              - integer
+              - "null"
+            minimum: 0
+            default: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: A page of drafts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SummaryDraftList"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident in this tenant
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or query failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/incidents/{id}/summary:
+    put:
+      summary: Set an incident's summary, and optionally its severity
+      description: Any member may write the summary by hand or accept a ready draft
+        (draftId), editing it first if they like. A severity change is refused
+        on a resolved incident.
+      security: *a1
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSummaryRequest"
+      responses:
+        "200":
+          description: The incident with its summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Incident"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: No such incident, or draftId is not a ready draft of it
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Severity change on a resolved incident, or the incident changed
+            meanwhile
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Id or body failed validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /v1/incidents/{id}/events:
     get:
       summary: An incident's audit timeline, oldest first
@@ -1633,6 +1914,8 @@ paths:
               - incident.acknowledged
               - incident.resolved
               - incident.assigned
+              - incident.summary_set
+              - incident.severity_changed
               - alert.grouped
               - alert_source.created
               - alert_source.updated
@@ -2423,9 +2706,11 @@ paths:
         on_call_schedule.created and on_call_schedule.updated ({ schedule:
         OnCallSchedule }); on_call_schedule.deleted ({ id });
         on_call_override.created ({ scheduleId, override: OnCallOverride });
-        on_call_override.deleted ({ scheduleId, id }). The stream closes when
-        the token expires or the member is removed. There is no replay. Spec:
-        docs/features/realtime-status.md."
+        on_call_override.deleted ({ scheduleId, id }). incident.updated ({
+        incident }) when its summary or severity changes; summary_draft.ready ({
+        incidentId, draft: SummaryDraft }) when a draft finishes. The stream
+        closes when the token expires or the member is removed. There is no
+        replay. Spec: docs/features/realtime-status.md."
       security: *a1
       responses:
         "200":

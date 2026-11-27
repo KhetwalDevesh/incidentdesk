@@ -8,13 +8,16 @@ import type {
 	IncidentExpectation,
 	IncidentRepository,
 	ReassignOutcome,
+	SummaryChange,
 } from "../../domain/incidents/types";
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
+import type { DraftRequest } from "../../domain/summaries/types";
 import type { InMemoryAccountRepository } from "../accounts/inMemoryAccountRepository";
 import { InMemoryAuditStore } from "../audit/inMemoryAuditStore";
 import { InMemoryChangeFeed } from "../events/inMemoryChangeFeed";
 import { InMemoryNotificationDeliveryRepository } from "../notifications/inMemoryNotificationDeliveryRepository";
+import { InMemorySummaryDraftRepository } from "../summaries/inMemorySummaryDraftRepository";
 
 export class InMemoryIncidentRepository implements IncidentRepository {
 	private readonly incidents = new Map<IncidentId, Incident>();
@@ -26,6 +29,7 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		// Without it, the tenant has no members, as for a non-uuid tenant in Postgres.
 		private readonly members: InMemoryAccountRepository | null = null,
 		readonly feed: InMemoryChangeFeed = new InMemoryChangeFeed(),
+		readonly drafts: InMemorySummaryDraftRepository = new InMemorySummaryDraftRepository(feed),
 	) {
 		// The twin of the member removal unassigning their incidents in its transaction.
 		members?.removalHooks.push((tenantId, userIds) => {
@@ -46,12 +50,14 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		incident: Omit<Incident, "tenantId">,
 		audit: AuditEntry[],
 		notice?: DeliveryNotice,
+		draft?: DraftRequest,
 	): Promise<Incident> {
 		this.audit.checkSync(audit);
 		const stored = { ...incident, tenantId };
 		this.incidents.set(stored.id, stored);
 		this.audit.appendSync(audit);
 		if (notice) this.deliveries.insertSync(tenantId, notice);
+		if (draft) this.drafts.insertSync(tenantId, draft);
 		this.feed.publishSync({ kind: "incident", tenantId, id: stored.id, event: "incident.opened" });
 		return stored;
 	}
@@ -121,6 +127,25 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		if (notice) this.deliveries.insertSync(tenantId, notice);
 		const event = transitionEvent(changes);
 		if (event) this.feed.publishSync({ kind: "incident", tenantId, id, event });
+		return updated;
+	}
+
+	async setSummary(
+		tenantId: TenantId,
+		id: IncidentId,
+		{ summary, severity }: SummaryChange,
+		audit: AuditEntry[],
+	): Promise<Incident | null> {
+		const current = this.incidents.get(id);
+		if (current?.tenantId !== tenantId) return null;
+		if (severity && (current.status === "resolved" || current.severity !== severity.from)) {
+			return null;
+		}
+		this.audit.checkSync(audit);
+		const updated = { ...current, summary, severity: severity?.to ?? current.severity };
+		this.incidents.set(id, updated);
+		this.audit.appendSync(audit);
+		this.feed.publishSync({ kind: "incident", tenantId, id, event: "incident.updated" });
 		return updated;
 	}
 

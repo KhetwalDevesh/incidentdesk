@@ -2,6 +2,7 @@ import { z } from "zod";
 import { DashboardSchema } from "./dashboard";
 import { IncidentSchema } from "./incidents";
 import { OnCallOverrideSchema, OnCallScheduleSchema } from "./onCall";
+import { SummaryDraftSchema } from "./summaries";
 
 // Spec: docs/features/realtime-status.md. The data of each Server-Sent Event, by event name.
 // OpenAPI cannot describe a stream's events, so these are checked by the contract tests.
@@ -28,6 +29,9 @@ export const STREAM_EVENT_SCHEMAS = {
 	"incident.acknowledged": IncidentEventSchema,
 	"incident.resolved": IncidentEventSchema,
 	"incident.reassigned": IncidentEventSchema,
+	// Spec: docs/features/ai-summaries.md.
+	"incident.updated": IncidentEventSchema,
+	"summary_draft.ready": z.strictObject({ incidentId: z.uuid(), draft: SummaryDraftSchema }),
 	dashboard: DashboardSchema,
 	"on_call_schedule.created": ScheduleEventSchema,
 	"on_call_schedule.updated": ScheduleEventSchema,

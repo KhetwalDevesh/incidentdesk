@@ -65,6 +65,7 @@ const newIncident = (): Omit<Incident, "tenantId"> => ({
 	lastAlertAt: null,
 	assigneeId: null,
 	assignmentCount: 0,
+	summary: null,
 });
 
 type Stores = {

@@ -59,6 +59,7 @@ import {
 	OnCallSchema,
 	UpdateOnCallScheduleRequestSchema,
 } from "./onCall";
+import { SetSummaryRequestSchema, SummaryDraftListSchema, SummaryDraftSchema } from "./summaries";
 
 const registry = new OpenAPIRegistry();
 const bearer = registry.registerComponent("securitySchemes", "bearerAuth", {
@@ -178,6 +179,57 @@ registry.registerPath({
 		403: problem("Only an admin can unassign an incident"),
 		404: problem("No such incident or member in this tenant"),
 		409: problem("Incident is resolved, or changed while reassigning"),
+		422: problem("Id or body failed validation"),
+	},
+});
+
+// AI summaries. Spec: docs/features/ai-summaries.md.
+registry.registerPath({
+	method: "post",
+	path: "/v1/incidents/{id}/summary-drafts",
+	summary: "Ask the AI for a fresh summary draft",
+	description:
+		"Returns the incident's pending draft if it has one. The draft is written in the background, and stays a suggestion until a member accepts it. Over the tenant's daily cap, the draft comes back skipped.",
+	security,
+	request: { params: z.object({ id: z.uuid() }) },
+	responses: {
+		202: json(SummaryDraftSchema, "The queued, pending or skipped draft"),
+		...authErrors,
+		404: problem("No such incident in this tenant"),
+		422: problem("Id is not a UUID"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/incidents/{id}/summary-drafts",
+	summary: "List an incident's summary drafts, newest first",
+	security,
+	request: { params: z.object({ id: z.uuid() }), query: PageQuerySchema },
+	responses: {
+		200: json(SummaryDraftListSchema, "A page of drafts"),
+		...authErrors,
+		404: problem("No such incident in this tenant"),
+		422: problem("Id or query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "put",
+	path: "/v1/incidents/{id}/summary",
+	summary: "Set an incident's summary, and optionally its severity",
+	description:
+		"Any member may write the summary by hand or accept a ready draft (draftId), editing it first if they like. A severity change is refused on a resolved incident.",
+	security,
+	request: {
+		params: z.object({ id: z.uuid() }),
+		body: { content: { "application/json": { schema: SetSummaryRequestSchema } } },
+	},
+	responses: {
+		200: json(IncidentSchema, "The incident with its summary"),
+		...authErrors,
+		404: problem("No such incident, or draftId is not a ready draft of it"),
+		409: problem("Severity change on a resolved incident, or the incident changed meanwhile"),
 		422: problem("Id or body failed validation"),
 	},
 });
@@ -487,6 +539,8 @@ registry.registerPath({
 		"on_call_schedule.created and on_call_schedule.updated ({ schedule: OnCallSchedule });",
 		"on_call_schedule.deleted ({ id }); on_call_override.created ({ scheduleId, override: OnCallOverride });",
 		"on_call_override.deleted ({ scheduleId, id }).",
+		"incident.updated ({ incident }) when its summary or severity changes;",
+		"summary_draft.ready ({ incidentId, draft: SummaryDraft }) when a draft finishes.",
 		"The stream closes when the token expires or the member is removed. There is no replay.",
 		"Spec: docs/features/realtime-status.md.",
 	].join(" "),

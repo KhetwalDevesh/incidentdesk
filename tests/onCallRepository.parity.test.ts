@@ -135,6 +135,7 @@ const incident = (assigneeId: string | null = null): Omit<Incident, "tenantId"> 
 	lastAlertAt: null,
 	assigneeId,
 	assignmentCount: 0,
+	summary: null,
 });
 
 const reassignedNotice = (incidentId: IncidentId, email: string | null): DeliveryNotice => ({

@@ -13,6 +13,7 @@ import type { AuditEntry } from "../../domain/audit/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
+import type { DraftRequest } from "../../domain/summaries/types";
 import { insertAuditEntries } from "../audit/postgresAuditRepository";
 import { publishChange } from "../events/postgresChangePublisher";
 import {
@@ -21,6 +22,9 @@ import {
 	incidentValues,
 } from "../incidents/postgresIncidentRepository";
 import { insertDeliveries } from "../notifications/postgresNotificationDeliveryRepository";
+import { insertDraft } from "../summaries/postgresSummaryDraftRepository";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const COLUMNS =
 	"id, tenant_id, source_id, dedup_key, title, severity, alert_status, details, received_at, state, attempts, next_attempt_at, last_error, incident_id, processed_at, sent_at";
@@ -178,6 +182,7 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 		processedAt: Date,
 		audit: (outcome: GroupingOutcome) => AuditEntry[],
 		notice?: (outcome: GroupingOutcome) => DeliveryNotice | null,
+		draft?: (outcome: GroupingOutcome) => DraftRequest | null,
 	): Promise<{ incidentId: IncidentId | null } | null> {
 		return this.transaction(async (client) => {
 			// Locks the alert, so a second worker holding an expired lease waits, then sees it processed.
@@ -216,6 +221,8 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 			await insertAuditEntries(client, audit({ incidentId, opened }));
 			const deliveries = notice?.({ incidentId, opened });
 			if (deliveries) await insertDeliveries(client, tenantId, deliveries);
+			const summary = draft?.({ incidentId, opened });
+			if (summary) await insertDraft(client, tenantId, summary);
 			if (opened && incidentId) {
 				await publishChange(client, {
 					kind: "incident",
@@ -226,6 +233,21 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 			}
 			return { incidentId };
 		});
+	}
+
+	async listForIncident(
+		tenantId: TenantId,
+		incidentId: IncidentId,
+		limit: number,
+	): Promise<Alert[]> {
+		// Alerts key tenants by uuid, so a tenant whose id is not one has no alerts.
+		if (!UUID.test(tenantId)) return [];
+		const { rows } = await this.pool.query<AlertRow>(
+			`SELECT ${COLUMNS} FROM alerts WHERE tenant_id = $1 AND incident_id = $2
+			ORDER BY received_at DESC, id LIMIT $3`,
+			[tenantId, incidentId, limit],
+		);
+		return rows.map(toAlert);
 	}
 
 	async fail(

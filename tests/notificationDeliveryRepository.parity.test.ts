@@ -102,6 +102,7 @@ const newIncident = (severity: IncidentSeverity = "sev2"): Omit<Incident, "tenan
 	lastAlertAt: null,
 	assigneeId: null,
 	assignmentCount: 0,
+	summary: null,
 });
 
 const noticeFor = (

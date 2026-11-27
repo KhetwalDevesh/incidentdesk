@@ -20,6 +20,7 @@ import {
 	type WebhookSender,
 } from "../src/domain/notifications/types";
 import type { Principal, TenantId } from "../src/domain/shared/identity";
+import type { SummaryPrompt, SummaryWriter, WriterResult } from "../src/domain/summaries/types";
 import { createApp } from "../src/http/app";
 import { InMemoryAccountRepository } from "../src/repository/accounts/inMemoryAccountRepository";
 import { InMemoryAlertRepository } from "../src/repository/alerts/inMemoryAlertRepository";
@@ -32,6 +33,7 @@ import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemory
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { InMemoryNotificationDeliveryRepository } from "../src/repository/notifications/inMemoryNotificationDeliveryRepository";
 import { InMemoryOnCallRepository } from "../src/repository/onCall/inMemoryOnCallRepository";
+import { InMemorySummaryDraftRepository } from "../src/repository/summaries/inMemorySummaryDraftRepository";
 import { createAlertIngestService } from "../src/services/alerts/alertIngestService";
 import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
 import { createAlertService } from "../src/services/alerts/alertService";
@@ -53,6 +55,8 @@ import { createDeliveryProcessor } from "../src/services/notifications/deliveryP
 import { createNotificationChannelService } from "../src/services/notifications/notificationChannelService";
 import { createOnCallAssigner } from "../src/services/onCall/onCallAssigner";
 import { createOnCallScheduleService } from "../src/services/onCall/onCallScheduleService";
+import { createSummaryProcessor } from "../src/services/summaries/summaryProcessor";
+import { createSummaryService } from "../src/services/summaries/summaryService";
 
 export const TEST_JWT_SECRET = "test-secret-that-is-at-least-32-characters";
 // 32 zero bytes. Tests only.
@@ -91,6 +95,32 @@ export class FakeWebhookSender implements WebhookSender {
 	}
 }
 
+// Records each prompt and answers from a script, so tests never call a model. Default: a
+// valid draft. Spec: docs/features/ai-summaries.md.
+export class FakeSummaryWriter implements SummaryWriter {
+	readonly prompts: SummaryPrompt[] = [];
+	// Answers in order; the last one repeats.
+	answers: WriterResult[] = [];
+
+	async write(prompt: SummaryPrompt): Promise<WriterResult> {
+		this.prompts.push(prompt);
+		const answer = this.answers.length > 1 ? this.answers.shift() : this.answers[0];
+		return (
+			answer ?? {
+				kind: "ok",
+				content: JSON.stringify({
+					summary: "Checkout API latency is high in all regions.",
+					suggestedSeverity: "sev1",
+					rationale: "Customer-facing and widespread.",
+				}),
+				model: "test/fake-model",
+				inputTokens: 1200,
+				outputTokens: 80,
+			}
+		);
+	}
+}
+
 // Cheap argon2 costs keep the suite fast. Production uses the library defaults.
 export const testHasher = () => createArgon2PasswordHasher({ memoryCost: 1024, timeCost: 1 });
 
@@ -104,6 +134,8 @@ export const buildTestApp = (
 		// The throttle's clock. Spec: docs/features/login-rate-limiting.md.
 		authNow?: () => Date;
 		trustedProxyHops?: number;
+		// Spec: docs/features/ai-summaries.md.
+		aiDailyCap?: number;
 	} = {},
 ) => buildTestSystem(options).app;
 
@@ -119,6 +151,8 @@ export const buildTestSystem = (
 		// The throttle's clock. Spec: docs/features/login-rate-limiting.md.
 		authNow?: () => Date;
 		trustedProxyHops?: number;
+		// Spec: docs/features/ai-summaries.md.
+		aiDailyCap?: number;
 	} = {},
 ) => {
 	// One audit store for every repository, as Postgres has one audit_events table.
@@ -146,7 +180,9 @@ export const buildTestSystem = (
 		now: options.alertNow,
 	});
 	const policy = createWebhookPolicy(TEST_WEBHOOK_ORIGINS);
-	const incidents = new InMemoryIncidentRepository(audit, deliveries, accounts, feed);
+	const drafts = new InMemorySummaryDraftRepository(feed);
+	const incidents = new InMemoryIncidentRepository(audit, deliveries, accounts, feed, drafts);
+	const views = createIncidentViews(accounts);
 	const dashboardDeps = {
 		stats: new InMemoryIncidentStatsReader(incidents),
 		members: accounts,
@@ -161,8 +197,9 @@ export const buildTestSystem = (
 	const eventHub = createEventHub({
 		feed,
 		incidents,
-		views: createIncidentViews(accounts),
+		views,
 		schedules,
+		drafts,
 		dashboard: (tenantId) => createDashboardBuilder(dashboardDeps)(tenantId, null),
 		now: options.alertNow,
 		// Short, so stream tests need not wait the production second.
@@ -177,6 +214,7 @@ export const buildTestSystem = (
 			dispatcher,
 			onCall,
 			now: options.alertNow,
+			summaries: { dailyCap: options.aiDailyCap ?? 100 },
 		}),
 		memberService: createMemberService(accounts),
 		notificationChannelService: createNotificationChannelService({
@@ -200,6 +238,13 @@ export const buildTestSystem = (
 		onCallScheduleService: createOnCallScheduleService(schedules, options.alertNow),
 		dashboardService: createDashboardService(dashboardDeps),
 		eventHub,
+		summaryService: createSummaryService({
+			incidents,
+			drafts,
+			views,
+			dailyCap: options.aiDailyCap ?? 100,
+			now: options.alertNow,
+		}),
 		trustedProxyHops: options.trustedProxyHops ?? 0,
 	});
 	const processor = createAlertProcessor({
@@ -210,6 +255,16 @@ export const buildTestSystem = (
 		sources: alertSources,
 		dispatcher,
 		onCall,
+		summaries: { dailyCap: options.aiDailyCap ?? 100 },
+	});
+	// A fake model: tests set its answers. No test ever calls a real provider.
+	const writer = new FakeSummaryWriter();
+	const summaryProcessor = createSummaryProcessor({
+		drafts,
+		incidents,
+		alerts,
+		writer,
+		now: options.alertNow,
 	});
 	const sender = new FakeWebhookSender();
 	const deliveryErrors: { subject: string; error: unknown }[] = [];
@@ -232,6 +287,9 @@ export const buildTestSystem = (
 		eventHub,
 		realtimeErrors,
 		throttle,
+		drafts,
+		writer,
+		summaryProcessor,
 		schedules,
 		alerts,
 		queue,

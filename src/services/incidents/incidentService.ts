@@ -30,6 +30,8 @@ export type IncidentServiceDeps = {
 	dispatcher?: DeliveryDispatcher;
 	// Picks the assignee of an incident a person opens. Spec: docs/features/on-call-schedules.md.
 	onCall?: OnCallAssigner;
+	// Queues an AI summary draft when an incident opens. Spec: docs/features/ai-summaries.md.
+	summaries?: { dailyCap: number };
 };
 
 const NONE = "none";
@@ -59,6 +61,7 @@ export const createIncidentService = (
 		members,
 		dispatcher = NO_DISPATCH,
 		onCall = NO_ASSIGNER,
+		summaries,
 	}: IncidentServiceDeps = {},
 ): IncidentService => {
 	const emailOf = async (tenantId: TenantId, userId: string) =>
@@ -184,6 +187,7 @@ export const createIncidentService = (
 				lastAlertAt: null,
 				assigneeId: assignee?.userId ?? null,
 				assignmentCount: 0,
+				summary: null,
 			};
 			const entries = [
 				auditEntry(
@@ -215,6 +219,15 @@ export const createIncidentService = (
 					createdAt,
 					assignee ? { email: assignee.email } : null,
 				),
+				summaries
+					? {
+							id: randomUUID(),
+							incidentId: id,
+							requestedBy: null,
+							createdAt,
+							dailyCap: summaries.dailyCap,
+						}
+					: undefined,
 			);
 			await dispatcher.dispatch(principal.tenantId, id, "incident.opened");
 			return ok(await view(incident));

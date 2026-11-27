@@ -5,6 +5,7 @@ import type { StreamEvent, StreamSink } from "../../domain/events/types";
 import type { Incident } from "../../domain/incidents/types";
 import type { OnCallOverride, OnCallSchedule } from "../../domain/onCall/types";
 import type { Principal, TenantId } from "../../domain/shared/identity";
+import type { SummaryDraft } from "../../domain/summaries/types";
 import { InMemoryChangeFeed } from "../../repository/events/inMemoryChangeFeed";
 import { createEventHub } from "./eventHub";
 
@@ -39,6 +40,7 @@ const incident = (id: string, tenantId = ACME): Incident => ({
 	lastAlertAt: null,
 	assigneeId: null,
 	assignmentCount: 0,
+	summary: null,
 });
 
 const dashboardOf = (tenantId: TenantId): Dashboard => ({
@@ -111,6 +113,12 @@ describe("event hub", () => {
 				findOverride: async (tenantId, scheduleId, id) => {
 					loads.push(`override ${tenantId} ${id}`);
 					return { id, tenantId, scheduleId } as OnCallOverride;
+				},
+			},
+			drafts: {
+				findById: async (tenantId, id) => {
+					loads.push(`draft ${tenantId} ${id}`);
+					return { id, tenantId, incidentId: "i-1", state: "ready" } as SummaryDraft;
 				},
 			},
 			dashboard: async (tenantId) => {
@@ -250,6 +258,24 @@ describe("event hub", () => {
 			{ type: "on_call_override.deleted", scheduleId: "s", id: "o" },
 		]);
 		expect(loads).toEqual([`schedule ${ACME} s`, `override ${ACME} o`]);
+	});
+
+	// Spec: docs/features/ai-summaries.md.
+	it("sends a finished summary draft, and an incident's summary change with a dashboard", async () => {
+		const grace = sink();
+		hub.connect(member("grace"), grace);
+
+		feed.publishSync({ kind: "summary_draft", tenantId: ACME, incidentId: "i-1", id: "d-1" });
+		feed.publishSync({ kind: "incident", tenantId: ACME, id: "i-1", event: "incident.updated" });
+		await flush();
+		await vi.advanceTimersByTimeAsync(1000);
+		await flush();
+
+		expect(grace.events.slice(1, 3)).toMatchObject([
+			{ type: "summary_draft.ready", incidentId: "i-1", draft: { id: "d-1", state: "ready" } },
+			{ type: "incident.updated", incident: { id: "i-1" } },
+		]);
+		expect(types(grace).at(-1)).toBe("dashboard");
 	});
 
 	it("closes a removed member's streams, and tells the rest of the tenant to resync", async () => {

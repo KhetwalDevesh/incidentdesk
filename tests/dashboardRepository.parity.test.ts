@@ -62,6 +62,7 @@ const newIncident = (
 	lastAlertAt: null,
 	assigneeId: null,
 	assignmentCount: 0,
+	summary: null,
 	...overrides,
 });
 

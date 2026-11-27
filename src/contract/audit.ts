@@ -16,6 +16,8 @@ export const AUDIT_ACTIONS = [
 	"incident.acknowledged",
 	"incident.resolved",
 	"incident.assigned",
+	"incident.summary_set",
+	"incident.severity_changed",
 	"alert.grouped",
 	"alert_source.created",
 	"alert_source.updated",

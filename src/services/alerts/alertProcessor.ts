@@ -49,6 +49,8 @@ export type AlertProcessorDeps = {
 	// Picks the assignee of an incident an alert opens: from the source's linked schedule, or
 	// the default. Spec: docs/features/on-call-schedules.md.
 	onCall?: OnCallAssigner;
+	// Queues an AI summary draft for an incident an alert opens. Spec: docs/features/ai-summaries.md.
+	summaries?: { dailyCap: number };
 };
 
 const MAX_ID_LENGTH = 200;
@@ -134,6 +136,7 @@ const candidateFor = (
 				lastAlertAt: alert.receivedAt,
 				assigneeId: assignee?.userId ?? null,
 				assignmentCount: 0,
+				summary: null,
 			}
 		: null;
 
@@ -172,6 +175,7 @@ export const createAlertProcessor = ({
 	sources,
 	dispatcher = NO_DISPATCH,
 	onCall = NO_ASSIGNER,
+	summaries,
 }: AlertProcessorDeps): AlertProcessor => {
 	// findForIngest runs across tenants, so the source must belong to the alert's tenant.
 	const sourceOf = async (alert: Alert) => {
@@ -230,6 +234,16 @@ export const createAlertProcessor = ({
 				at,
 				({ incidentId, opened }) => groupingAudit(alert, incidentId, opened, at, assignee),
 				({ opened }) => (opened && candidate ? openedNotice(candidate, name, assignee) : null),
+				({ opened }) =>
+					opened && candidate && summaries
+						? {
+								id: newId(),
+								incidentId: candidate.id,
+								requestedBy: null,
+								createdAt: at,
+								dailyCap: summaries.dailyCap,
+							}
+						: null,
 			);
 			// Opened means our candidate was inserted. An alert joining an incident posts nothing.
 			if (candidate && completed?.incidentId === candidate.id) {

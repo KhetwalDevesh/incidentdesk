@@ -2,6 +2,7 @@ import { SQSClient } from "@aws-sdk/client-sqs";
 import { Pool } from "pg";
 import { createAesGcmSecretBox } from "../adapters/aesGcmSecretBox";
 import { createArgon2PasswordHasher } from "../adapters/argon2PasswordHasher";
+import { createChatCompletionsSummaryWriter } from "../adapters/chatCompletionsSummaryWriter";
 import { createFetchWebhookSender } from "../adapters/fetchWebhookSender";
 import { createHmacAlertSignatureVerifier } from "../adapters/hmacAlertSignature";
 import { createJwtTokenService } from "../adapters/jwtTokenService";
@@ -26,6 +27,7 @@ import { PostgresIncidentRepository } from "../repository/incidents/postgresInci
 import { PostgresNotificationChannelRepository } from "../repository/notifications/postgresNotificationChannelRepository";
 import { PostgresNotificationDeliveryRepository } from "../repository/notifications/postgresNotificationDeliveryRepository";
 import { PostgresOnCallRepository } from "../repository/onCall/postgresOnCallRepository";
+import { PostgresSummaryDraftRepository } from "../repository/summaries/postgresSummaryDraftRepository";
 import { createAlertIngestService } from "../services/alerts/alertIngestService";
 import { createAlertProcessor } from "../services/alerts/alertProcessor";
 import { createAlertService } from "../services/alerts/alertService";
@@ -45,6 +47,8 @@ import { createDeliveryProcessor } from "../services/notifications/deliveryProce
 import { createNotificationChannelService } from "../services/notifications/notificationChannelService";
 import { createOnCallAssigner } from "../services/onCall/onCallAssigner";
 import { createOnCallScheduleService } from "../services/onCall/onCallScheduleService";
+import { createSummaryProcessor } from "../services/summaries/summaryProcessor";
+import { createSummaryService } from "../services/summaries/summaryService";
 
 // The composition root: the only place that picks concrete repositories and adapters.
 
@@ -93,11 +97,14 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 	const dashboardDeps = { stats: new PostgresIncidentStatsReader(pool), members: accounts };
 	// One LISTEN connection per instance, outside the pool. Spec: docs/features/realtime-status.md.
 	const feed = createPgChangeFeed({ connectionString: config.DATABASE_URL }, log.onRealtimeError);
+	const drafts = new PostgresSummaryDraftRepository(pool);
+	const views = createIncidentViews(accounts);
 	const eventHub = createEventHub({
 		feed,
 		incidents,
-		views: createIncidentViews(accounts),
+		views,
 		schedules,
+		drafts,
 		dashboard: (tenantId) => createDashboardBuilder(dashboardDeps)(tenantId, null),
 		onError: log.onRealtimeError,
 	});
@@ -113,6 +120,7 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 				queue: buildNotificationQueue(config),
 				onSendError: log.onDeliverySendError,
 			}),
+			summaries: { dailyCap: config.AI_DAILY_DRAFT_CAP },
 		}),
 		memberService: createMemberService(accounts),
 		notificationChannelService: createNotificationChannelService({
@@ -135,6 +143,12 @@ export const buildApp = (config: Config, log: AppErrorLog) => {
 		onCallScheduleService: createOnCallScheduleService(schedules),
 		dashboardService: createDashboardService(dashboardDeps),
 		eventHub,
+		summaryService: createSummaryService({
+			incidents,
+			drafts,
+			views,
+			dailyCap: config.AI_DAILY_DRAFT_CAP,
+		}),
 		trustedProxyHops: config.TRUSTED_PROXY_HOPS,
 	});
 	return { app, pool, eventHub, feed };
@@ -158,6 +172,23 @@ export const buildWorker = (config: Config, onError: (subject: string, error: un
 			queue: notificationQueue,
 			onSendError: (deliveryId, error) => onError(`delivery ${deliveryId} send`, error),
 		}),
+		summaries: { dailyCap: config.AI_DAILY_DRAFT_CAP },
+	});
+	// Spec: docs/features/ai-summaries.md. No key, no model calls: drafts are skipped.
+	const summaryProcessor = createSummaryProcessor({
+		drafts: new PostgresSummaryDraftRepository(pool),
+		incidents: new PostgresIncidentRepository(pool),
+		alerts,
+		writer:
+			config.AI_API_KEY && config.AI_MODEL
+				? createChatCompletionsSummaryWriter({
+						baseUrl: config.AI_BASE_URL,
+						apiKey: config.AI_API_KEY,
+						model: config.AI_MODEL,
+						denyDataCollection: config.AI_DENY_DATA_COLLECTION,
+					})
+				: null,
+		onError,
 	});
 	const deliveryProcessor = createDeliveryProcessor({
 		queue: notificationQueue,
@@ -179,5 +210,13 @@ export const buildWorker = (config: Config, onError: (subject: string, error: un
 		purger: new PostgresLoginThrottle(pool),
 		retentionMs: THROTTLE_RETENTION_MS,
 	});
-	return { processor, deliveryProcessor, purgeAudit, purgeDeliveries, purgeThrottle, pool };
+	return {
+		processor,
+		deliveryProcessor,
+		summaryProcessor,
+		purgeAudit,
+		purgeDeliveries,
+		purgeThrottle,
+		pool,
+	};
 };

@@ -3,6 +3,7 @@ import type { StreamEvent } from "../domain/events/types";
 import { toDashboardResponse } from "./dashboard";
 import { toIncidentResponse } from "./incidents";
 import { toOnCallOverrideResponse, toOnCallScheduleResponse } from "./onCall";
+import { toSummaryDraftResponse } from "./summaries";
 
 // The allowlist of what leaves the API on a stream: every resource through its own mapper.
 export const toStreamMessage = (event: StreamEvent): { name: StreamEventName; data: unknown } => {
@@ -14,7 +15,13 @@ export const toStreamMessage = (event: StreamEvent): { name: StreamEventName; da
 		case "incident.acknowledged":
 		case "incident.resolved":
 		case "incident.reassigned":
+		case "incident.updated":
 			return { name: event.type, data: { incident: toIncidentResponse(event.incident) } };
+		case "summary_draft.ready":
+			return {
+				name: event.type,
+				data: { incidentId: event.incidentId, draft: toSummaryDraftResponse(event.draft) },
+			};
 		case "dashboard":
 			return { name: "dashboard", data: toDashboardResponse(event.dashboard) };
 		case "on_call_schedule.created":

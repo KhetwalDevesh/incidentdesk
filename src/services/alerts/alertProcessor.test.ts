@@ -97,6 +97,7 @@ const throwingComplete = (alerts: InMemoryAlertRepository): AlertRepository => (
 	markSent: alerts.markSent.bind(alerts),
 	startAttempt: alerts.startAttempt.bind(alerts),
 	fail: alerts.fail.bind(alerts),
+	listForIncident: alerts.listForIncident.bind(alerts),
 	complete: async () => {
 		throw new Error("database is down");
 	},
@@ -121,6 +122,7 @@ describe("alertProcessor grouping", () => {
 			lastAlertAt: alert.receivedAt,
 			assigneeId: null,
 			assignmentCount: 0,
+			summary: null,
 		});
 		expect(await allAlerts()).toMatchObject([
 			{ id: alert.id, state: "processed", incidentId: incident?.id, attempts: 1 },
@@ -156,6 +158,7 @@ describe("alertProcessor grouping", () => {
 			lastAlertAt: repeat.receivedAt,
 			assigneeId: null,
 			assignmentCount: 0,
+			summary: null,
 		});
 	});
 
