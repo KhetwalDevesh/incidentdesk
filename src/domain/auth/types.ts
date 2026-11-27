@@ -110,11 +110,13 @@ export interface PasswordHasher {
 
 export type AccessToken = { accessToken: string; expiresIn: number };
 export type TokenClaims = { tenantId: TenantId; userId: string };
+// What a verified token says, including when it stops being valid.
+export type VerifiedToken = TokenClaims & { expiresAt: Date };
 
 export interface TokenService {
 	issue(claims: TokenClaims): Promise<AccessToken>;
 	// Null for any token that is malformed, tampered, expired or signed another way.
-	verify(token: string): Promise<TokenClaims | null>;
+	verify(token: string): Promise<VerifiedToken | null>;
 }
 
 export interface AuthService {

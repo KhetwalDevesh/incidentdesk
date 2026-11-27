@@ -24,10 +24,13 @@ export const createJwtTokenService = (
 
 	async verify(token) {
 		try {
-			const { sub, tid } = await verify(token, secret, ALGORITHM);
-			if (typeof sub !== "string" || typeof tid !== "string") return null;
+			// verify refuses an expired token, so exp is in the future here.
+			const { sub, tid, exp } = await verify(token, secret, ALGORITHM);
+			if (typeof sub !== "string" || typeof tid !== "string" || typeof exp !== "number") {
+				return null;
+			}
 			if (!UUID.test(sub) || !UUID.test(tid)) return null;
-			return { tenantId: tid as TenantId, userId: sub };
+			return { tenantId: tid as TenantId, userId: sub, expiresAt: new Date(exp * 1000) };
 		} catch {
 			return null;
 		}

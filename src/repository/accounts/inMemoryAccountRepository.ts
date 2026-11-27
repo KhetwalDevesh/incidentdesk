@@ -14,6 +14,7 @@ import {
 } from "../../domain/auth/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { InMemoryAuditStore } from "../audit/inMemoryAuditStore";
+import { InMemoryChangeFeed } from "../events/inMemoryChangeFeed";
 
 type StoredSetupToken = NewSetupToken & { tenantId: TenantId; userId: string; usedAt: Date | null };
 
@@ -29,7 +30,10 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 	// updates that remove a member from other tables in the same transaction.
 	readonly removalHooks: ((tenantId: TenantId, userIds: Set<string>) => void)[] = [];
 
-	constructor(readonly audit: InMemoryAuditStore = new InMemoryAuditStore()) {}
+	constructor(
+		readonly audit: InMemoryAuditStore = new InMemoryAuditStore(),
+		readonly feed: InMemoryChangeFeed = new InMemoryChangeFeed(),
+	) {}
 
 	hasMemberSync(tenantId: TenantId, userId: string): boolean {
 		return this.users.get(userId)?.tenantId === tenantId;
@@ -170,6 +174,7 @@ export class InMemoryAccountRepository implements AccountRepository, CredentialS
 		}
 		for (const hook of this.removalHooks) hook(tenantId, removed);
 		this.audit.appendSync(entries);
+		this.feed.publishSync({ kind: "members_removed", tenantId, userIds });
 		return { applied: true, users: found.users };
 	}
 

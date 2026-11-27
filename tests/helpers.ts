@@ -26,6 +26,7 @@ import { InMemoryAlertRepository } from "../src/repository/alerts/inMemoryAlertR
 import { InMemoryAlertSourceRepository } from "../src/repository/alerts/inMemoryAlertSourceRepository";
 import { InMemoryAuditStore } from "../src/repository/audit/inMemoryAuditStore";
 import { InMemoryIncidentStatsReader } from "../src/repository/dashboard/inMemoryIncidentStatsReader";
+import { InMemoryChangeFeed } from "../src/repository/events/inMemoryChangeFeed";
 import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemoryIncidentRepository";
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { InMemoryNotificationDeliveryRepository } from "../src/repository/notifications/inMemoryNotificationDeliveryRepository";
@@ -36,8 +37,15 @@ import { createAlertService } from "../src/services/alerts/alertService";
 import { createAlertSourceService } from "../src/services/alerts/alertSourceService";
 import { createAuditService } from "../src/services/audit/auditService";
 import { createAuthService } from "../src/services/auth/authService";
-import { createDashboardService } from "../src/services/dashboard/dashboardService";
-import { createIncidentService } from "../src/services/incidents/incidentService";
+import {
+	createDashboardBuilder,
+	createDashboardService,
+} from "../src/services/dashboard/dashboardService";
+import { createEventHub } from "../src/services/events/eventHub";
+import {
+	createIncidentService,
+	createIncidentViews,
+} from "../src/services/incidents/incidentService";
 import { createMemberService } from "../src/services/members/memberService";
 import { createDeliveryDispatcher } from "../src/services/notifications/deliveryDispatcher";
 import { createDeliveryProcessor } from "../src/services/notifications/deliveryProcessor";
@@ -91,6 +99,7 @@ export const buildTestApp = (
 		notificationChannels?: InMemoryNotificationChannelRepository;
 		channelNow?: () => Date;
 		alertNow?: () => Date;
+		dashboardDelayMs?: number;
 	} = {},
 ) => buildTestSystem(options).app;
 
@@ -102,11 +111,14 @@ export const buildTestSystem = (
 		notificationChannels?: InMemoryNotificationChannelRepository;
 		channelNow?: () => Date;
 		alertNow?: () => Date;
+		dashboardDelayMs?: number;
 	} = {},
 ) => {
 	// One audit store for every repository, as Postgres has one audit_events table.
 	const audit = new InMemoryAuditStore();
-	const accounts = new InMemoryAccountRepository(audit);
+	// One feed for every repository, as Postgres has one NOTIFY channel.
+	const feed = new InMemoryChangeFeed();
+	const accounts = new InMemoryAccountRepository(audit, feed);
 	const authService = createAuthService({
 		credentials: accounts,
 		accounts,
@@ -124,12 +136,29 @@ export const buildTestSystem = (
 		now: options.alertNow,
 	});
 	const policy = createWebhookPolicy(TEST_WEBHOOK_ORIGINS);
-	const incidents = new InMemoryIncidentRepository(audit, deliveries, accounts);
+	const incidents = new InMemoryIncidentRepository(audit, deliveries, accounts, feed);
+	const dashboardDeps = {
+		stats: new InMemoryIncidentStatsReader(incidents),
+		members: accounts,
+		now: options.alertNow,
+	};
 	const schedules = new InMemoryOnCallRepository(accounts);
 	const onCall = createOnCallAssigner(schedules);
 	const alertSources = new InMemoryAlertSourceRepository(audit, schedules);
 	const alerts = new InMemoryAlertRepository(incidents);
 	const queue = new InMemoryQueue<AlertRef>({ now: options.alertNow });
+	const realtimeErrors: { subject: string; error: unknown }[] = [];
+	const eventHub = createEventHub({
+		feed,
+		incidents,
+		views: createIncidentViews(accounts),
+		schedules,
+		dashboard: (tenantId) => createDashboardBuilder(dashboardDeps)(tenantId, null),
+		now: options.alertNow,
+		// Short, so stream tests need not wait the production second.
+		dashboardDelayMs: options.dashboardDelayMs ?? 10,
+		onError: (subject, error) => realtimeErrors.push({ subject, error }),
+	});
 	const app = createApp({
 		authenticate: async (token) => FIXED_TOKENS[token] ?? authService.authenticate(token),
 		authService,
@@ -159,11 +188,8 @@ export const buildTestSystem = (
 		}),
 		auditService: createAuditService(audit, incidents),
 		onCallScheduleService: createOnCallScheduleService(schedules, options.alertNow),
-		dashboardService: createDashboardService({
-			stats: new InMemoryIncidentStatsReader(incidents),
-			members: accounts,
-			now: options.alertNow,
-		}),
+		dashboardService: createDashboardService(dashboardDeps),
+		eventHub,
 	});
 	const processor = createAlertProcessor({
 		queue,
@@ -191,6 +217,9 @@ export const buildTestSystem = (
 		app,
 		processor,
 		incidents,
+		feed,
+		eventHub,
+		realtimeErrors,
 		schedules,
 		alerts,
 		queue,

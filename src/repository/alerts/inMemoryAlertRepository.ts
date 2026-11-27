@@ -105,6 +105,14 @@ export class InMemoryAlertRepository implements AlertRepository, AlertOutbox {
 		}
 		this.incidents.audit.appendSync(entries);
 		if (deliveries) this.incidents.deliveries.insertSync(tenantId, deliveries);
+		if (outcome.opened && incidentId) {
+			this.incidents.feed.publishSync({
+				kind: "incident",
+				tenantId,
+				id: incidentId,
+				event: "incident.opened",
+			});
+		}
 
 		this.alerts.set(alertId, {
 			...alert,

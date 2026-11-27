@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import type { PageQuery } from "../../contract/common";
 import type { IncidentId } from "../../contract/incidents";
 import type { AuditEntry } from "../../domain/audit/types";
+import { transitionEvent } from "../../domain/events/types";
 import type {
 	Incident,
 	IncidentChanges,
@@ -13,6 +14,7 @@ import type {
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
+import { publishChange } from "../events/postgresChangePublisher";
 import { insertDeliveries } from "../notifications/postgresNotificationDeliveryRepository";
 
 export const INCIDENT_COLUMNS =
@@ -112,6 +114,12 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			);
 			await insertAuditEntries(client, audit);
 			if (notice) await insertDeliveries(client, tenantId, notice);
+			await publishChange(client, {
+				kind: "incident",
+				tenantId,
+				id: incident.id,
+				event: "incident.opened",
+			});
 			return toIncident(rows[0] as IncidentRow);
 		});
 	}
@@ -160,6 +168,8 @@ export class PostgresIncidentRepository implements IncidentRepository {
 			if (!rows[0]) return null;
 			await insertAuditEntries(client, [audit]);
 			if (notice) await insertDeliveries(client, tenantId, notice);
+			const event = transitionEvent(changes);
+			if (event) await publishChange(client, { kind: "incident", tenantId, id, event });
 			return toIncident(rows[0]);
 		});
 	}
@@ -197,6 +207,7 @@ export class PostgresIncidentRepository implements IncidentRepository {
 				...notice,
 				occurrence: incident.assignmentCount,
 			});
+			await publishChange(client, { kind: "incident", tenantId, id, event: "incident.reassigned" });
 			return { status: "reassigned", incident };
 		});
 	}

@@ -14,6 +14,7 @@ import type { Incident } from "../../domain/incidents/types";
 import type { DeliveryNotice } from "../../domain/notifications/types";
 import type { TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries } from "../audit/postgresAuditRepository";
+import { publishChange } from "../events/postgresChangePublisher";
 import {
 	INCIDENT_COLUMNS,
 	INCIDENT_PLACEHOLDERS,
@@ -215,6 +216,14 @@ export class PostgresAlertRepository implements AlertRepository, AlertOutbox {
 			await insertAuditEntries(client, audit({ incidentId, opened }));
 			const deliveries = notice?.({ incidentId, opened });
 			if (deliveries) await insertDeliveries(client, tenantId, deliveries);
+			if (opened && incidentId) {
+				await publishChange(client, {
+					kind: "incident",
+					tenantId,
+					id: incidentId,
+					event: "incident.opened",
+				});
+			}
 			return { incidentId };
 		});
 	}

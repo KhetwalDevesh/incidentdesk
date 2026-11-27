@@ -34,20 +34,11 @@ export type IncidentServiceDeps = {
 
 const NONE = "none";
 
-export const createIncidentService = (
-	repository: IncidentRepository,
-	{
-		now = () => new Date(),
-		members,
-		dispatcher = NO_DISPATCH,
-		onCall = NO_ASSIGNER,
-	}: IncidentServiceDeps = {},
-): IncidentService => {
-	const emailOf = async (tenantId: TenantId, userId: string) =>
-		(await members?.findUser(tenantId, userId))?.email ?? null;
-
-	// The assignees' emails, read now, so a response always shows the current one.
-	const views = async (tenantId: TenantId, incidents: Incident[]): Promise<IncidentView[]> => {
+// Adds each assignee's email, read now, so a response always shows the current one. Shared
+// with the realtime hub, which shows incidents exactly as the API does.
+export const createIncidentViews =
+	(members: Pick<AccountRepository, "findUsers"> | undefined) =>
+	async (tenantId: TenantId, incidents: Incident[]): Promise<IncidentView[]> => {
 		const ids = incidents.flatMap((incident) => (incident.assigneeId ? [incident.assigneeId] : []));
 		const found = ids.length > 0 && members ? await members.findUsers(tenantId, ids) : [];
 		const emails = new Map(found.map((user) => [user.id, user.email]));
@@ -60,6 +51,20 @@ export const createIncidentService = (
 			};
 		});
 	};
+
+export const createIncidentService = (
+	repository: IncidentRepository,
+	{
+		now = () => new Date(),
+		members,
+		dispatcher = NO_DISPATCH,
+		onCall = NO_ASSIGNER,
+	}: IncidentServiceDeps = {},
+): IncidentService => {
+	const emailOf = async (tenantId: TenantId, userId: string) =>
+		(await members?.findUser(tenantId, userId))?.email ?? null;
+
+	const views = createIncidentViews(members);
 
 	const view = async (incident: Incident) =>
 		(await views(incident.tenantId, [incident]))[0] as IncidentView;

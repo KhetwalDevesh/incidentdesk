@@ -12,6 +12,7 @@ import type {
 } from "../../domain/onCall/types";
 import type { TenantId } from "../../domain/shared/identity";
 import type { InMemoryAccountRepository } from "../accounts/inMemoryAccountRepository";
+import type { InMemoryChangeFeed } from "../events/inMemoryChangeFeed";
 
 type StoredSchedule = Omit<OnCallSchedule, "participants"> & { participantIds: string[] };
 type StoredOverride = Omit<OnCallOverride, "email">;
@@ -27,7 +28,11 @@ export class InMemoryOnCallRepository implements OnCallRepository {
 	// The twins of ON DELETE SET NULL from alert sources to a deleted schedule.
 	readonly deleteHooks: ((tenantId: TenantId, scheduleId: string) => void)[] = [];
 
+	// Publishes to the accounts store's feed, as every Postgres twin notifies one channel.
+	private readonly feed: InMemoryChangeFeed;
+
 	constructor(private readonly accounts: InMemoryAccountRepository) {
+		this.feed = accounts.feed;
 		// The twins of ON DELETE CASCADE from participants and overrides to users.
 		accounts.removalHooks.push((tenantId, userIds) => {
 			for (const schedule of this.schedules.values()) {
@@ -104,6 +109,12 @@ export class InMemoryOnCallRepository implements OnCallRepository {
 		};
 		this.schedules.set(stored.id, stored);
 		this.accounts.audit.appendSync([audit]);
+		this.feed.publishSync({
+			kind: "on_call_schedule",
+			tenantId,
+			id: stored.id,
+			event: "on_call_schedule.created",
+		});
 		return { status: "saved", schedule: this.view(stored) };
 	}
 
@@ -135,6 +146,12 @@ export class InMemoryOnCallRepository implements OnCallRepository {
 		};
 		this.schedules.set(id, updated);
 		this.accounts.audit.appendSync([entry]);
+		this.feed.publishSync({
+			kind: "on_call_schedule",
+			tenantId,
+			id,
+			event: "on_call_schedule.updated",
+		});
 		return { status: "saved", schedule: this.view(updated) };
 	}
 
@@ -155,6 +172,12 @@ export class InMemoryOnCallRepository implements OnCallRepository {
 		}
 		for (const hook of this.deleteHooks) hook(tenantId, id);
 		this.accounts.audit.appendSync([entry]);
+		this.feed.publishSync({
+			kind: "on_call_schedule",
+			tenantId,
+			id,
+			event: "on_call_schedule.deleted",
+		});
 		return true;
 	}
 
@@ -248,6 +271,13 @@ export class InMemoryOnCallRepository implements OnCallRepository {
 		const stored = { ...override, tenantId };
 		this.overrides.set(stored.id, stored);
 		this.accounts.audit.appendSync([audit]);
+		this.feed.publishSync({
+			kind: "on_call_override",
+			tenantId,
+			scheduleId: stored.scheduleId,
+			id: stored.id,
+			event: "on_call_override.created",
+		});
 		return { status: "added", override: this.overrideView(stored) };
 	}
 
@@ -262,6 +292,13 @@ export class InMemoryOnCallRepository implements OnCallRepository {
 		this.accounts.audit.checkSync([audit]);
 		this.overrides.delete(overrideId);
 		this.accounts.audit.appendSync([audit]);
+		this.feed.publishSync({
+			kind: "on_call_override",
+			tenantId,
+			scheduleId,
+			id: overrideId,
+			event: "on_call_override.deleted",
+		});
 		return true;
 	}
 }

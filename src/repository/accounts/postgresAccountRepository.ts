@@ -14,6 +14,7 @@ import {
 } from "../../domain/auth/types";
 import type { Role, TenantId } from "../../domain/shared/identity";
 import { insertAuditEntries, inTransaction } from "../audit/postgresAuditRepository";
+import { publishChange } from "../events/postgresChangePublisher";
 
 const USER_COLUMNS = "id, tenant_id, email, role, password_hash, created_at";
 
@@ -232,6 +233,7 @@ export class PostgresAccountRepository implements AccountRepository, CredentialS
 				userIds,
 			]);
 			await insertAuditEntries(client, locked.users.map(audit));
+			await publishChange(client, { kind: "members_removed", tenantId, userIds });
 			return { applied: true, users: locked.users };
 		});
 	}

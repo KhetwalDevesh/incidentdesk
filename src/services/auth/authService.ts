@@ -115,7 +115,12 @@ export const createAuthService = ({
 			// Loaded per request, so a removed user or a changed role applies immediately.
 			const user = await accounts.findUser(claims.tenantId, claims.userId);
 			if (!user?.passwordHash) return null;
-			return { tenantId: user.tenantId, userId: user.id, role: user.role };
+			return {
+				tenantId: user.tenantId,
+				userId: user.id,
+				role: user.role,
+				expiresAt: claims.expiresAt,
+			};
 		},
 	};
 };
