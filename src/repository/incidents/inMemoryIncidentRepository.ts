@@ -17,6 +17,7 @@ import type { InMemoryAccountRepository } from "../accounts/inMemoryAccountRepos
 import { InMemoryAuditStore } from "../audit/inMemoryAuditStore";
 import { InMemoryChangeFeed } from "../events/inMemoryChangeFeed";
 import { InMemoryNotificationDeliveryRepository } from "../notifications/inMemoryNotificationDeliveryRepository";
+import { InMemoryPostmortemDraftRepository } from "../postmortems/inMemoryPostmortemDraftRepository";
 import { InMemorySummaryDraftRepository } from "../summaries/inMemorySummaryDraftRepository";
 
 export class InMemoryIncidentRepository implements IncidentRepository {
@@ -30,6 +31,11 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		private readonly members: InMemoryAccountRepository | null = null,
 		readonly feed: InMemoryChangeFeed = new InMemoryChangeFeed(),
 		readonly drafts: InMemorySummaryDraftRepository = new InMemorySummaryDraftRepository(feed),
+		// Shares the daily budget with summary drafts, as Postgres counts both tables.
+		readonly postmortemDrafts: InMemoryPostmortemDraftRepository = new InMemoryPostmortemDraftRepository(
+			feed,
+			drafts.budget,
+		),
 	) {
 		// The twin of the member removal unassigning their incidents in its transaction.
 		members?.removalHooks.push((tenantId, userIds) => {
@@ -111,6 +117,7 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		changes: IncidentChanges,
 		audit: AuditEntry,
 		notice?: DeliveryNotice,
+		postmortemDraft?: DraftRequest,
 	): Promise<Incident | null> {
 		const current = this.incidents.get(id);
 		if (
@@ -125,6 +132,7 @@ export class InMemoryIncidentRepository implements IncidentRepository {
 		this.incidents.set(id, updated);
 		this.audit.appendSync([audit]);
 		if (notice) this.deliveries.insertSync(tenantId, notice);
+		if (postmortemDraft) this.postmortemDrafts.insertSync(tenantId, postmortemDraft);
 		const event = transitionEvent(changes);
 		if (event) this.feed.publishSync({ kind: "incident", tenantId, id, event });
 		return updated;

@@ -18,6 +18,8 @@ export const AUDIT_ACTIONS = [
 	"incident.assigned",
 	"incident.summary_set",
 	"incident.severity_changed",
+	"postmortem.saved",
+	"postmortem.published",
 	"alert.grouped",
 	"alert_source.created",
 	"alert_source.updated",

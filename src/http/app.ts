@@ -8,6 +8,7 @@ import type { EventHub } from "../domain/events/types";
 import type { IncidentService } from "../domain/incidents/types";
 import type { NotificationChannelService } from "../domain/notifications/types";
 import type { OnCallScheduleService } from "../domain/onCall/types";
+import type { PostmortemService } from "../domain/postmortems/types";
 import type { SummaryService } from "../domain/summaries/types";
 import { alertSourceRoutes } from "../routes/alertSources";
 import { alertRoutes } from "../routes/alerts";
@@ -21,6 +22,7 @@ import { incidentRoutes } from "../routes/incidents";
 import { memberRoutes } from "../routes/members";
 import { notificationChannelRoutes } from "../routes/notificationChannels";
 import { onCallScheduleRoutes } from "../routes/onCallSchedules";
+import { postmortemRoutes } from "../routes/postmortems";
 import { summaryRoutes } from "../routes/summaries";
 import { type Authenticator, requireAuth } from "./auth";
 import { clientIp } from "./clientIp";
@@ -44,6 +46,7 @@ export type AppDeps = {
 	dashboardService: DashboardService;
 	eventHub: EventHub;
 	summaryService: SummaryService;
+	postmortemService: PostmortemService;
 	// Proxies in front of the API whose X-Forwarded-For entries are trusted. Default 0.
 	trustedProxyHops?: number;
 };
@@ -62,6 +65,7 @@ export const createApp = ({
 	dashboardService,
 	eventHub,
 	summaryService,
+	postmortemService,
 	trustedProxyHops = 0,
 }: AppDeps) => {
 	const app = new Hono<AppEnv>();
@@ -91,6 +95,8 @@ export const createApp = ({
 	app.route("/v1/incidents", incidentRoutes(incidentService));
 	// /v1/incidents/{id}/summary-drafts and /v1/incidents/{id}/summary.
 	app.route("/v1/incidents", summaryRoutes(summaryService));
+	// /v1/incidents/{id}/postmortem-drafts and /v1/incidents/{id}/postmortem.
+	app.route("/v1/incidents", postmortemRoutes(postmortemService));
 	app.route("/v1/members", memberRoutes(memberService));
 	app.route("/v1/notification-channels", notificationChannelRoutes(notificationChannelService));
 	app.route("/v1/alert-sources", alertSourceRoutes(alertSourceService));

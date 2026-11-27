@@ -19,6 +19,7 @@ const {
 	processor,
 	deliveryProcessor,
 	summaryProcessor,
+	postmortemProcessor,
 	purgeAudit,
 	purgeDeliveries,
 	purgeThrottle,
@@ -55,6 +56,8 @@ await Promise.all([
 	loop("Delivery sweep", () => deliveryProcessor.sweep(), SWEEP_INTERVAL_MS),
 	// AI summary drafts. Spec: docs/features/ai-summaries.md.
 	loop("Summary drafts", () => summaryProcessor.process(), SUMMARY_INTERVAL_MS),
+	// Spec: docs/features/ai-postmortems.md.
+	loop("Postmortem drafts", () => postmortemProcessor.process(), SUMMARY_INTERVAL_MS),
 	loop("Audit purge", purgeAudit, PURGE_INTERVAL_MS),
 	loop("Delivery purge", purgeDeliveries, PURGE_INTERVAL_MS),
 	// Sign-in throttle keys idle for a day. Spec: docs/features/login-rate-limiting.md.

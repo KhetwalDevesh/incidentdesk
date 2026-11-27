@@ -1,3 +1,4 @@
+import type { IncidentId } from "../../contract/incidents";
 import type { Dashboard } from "../../domain/dashboard/types";
 import type {
 	ChangeFeed,
@@ -8,6 +9,10 @@ import type {
 } from "../../domain/events/types";
 import type { Incident, IncidentRepository, IncidentView } from "../../domain/incidents/types";
 import type { OnCallRepository } from "../../domain/onCall/types";
+import type {
+	PostmortemDraftRepository,
+	PostmortemRepository,
+} from "../../domain/postmortems/types";
 import type { Principal, TenantId } from "../../domain/shared/identity";
 import type { SummaryDraftRepository } from "../../domain/summaries/types";
 
@@ -24,6 +29,8 @@ export type EventHubDeps = {
 	views: (tenantId: TenantId, incidents: Incident[]) => Promise<IncidentView[]>;
 	schedules: Pick<OnCallRepository, "findById" | "findOverride">;
 	drafts: Pick<SummaryDraftRepository, "findById">;
+	postmortemDrafts: Pick<PostmortemDraftRepository, "findById">;
+	postmortems: Pick<PostmortemRepository, "find">;
 	dashboard: (tenantId: TenantId) => Promise<Dashboard>;
 	now?: () => Date;
 	maxStreamsPerMember?: number;
@@ -49,6 +56,8 @@ export const createEventHub = ({
 	views,
 	schedules,
 	drafts,
+	postmortemDrafts,
+	postmortems,
 	dashboard,
 	now = () => new Date(),
 	maxStreamsPerMember = MAX_STREAMS_PER_MEMBER,
@@ -165,6 +174,22 @@ export const createEventHub = ({
 				const draft = await drafts.findById(tenant, notice.id);
 				if (draft)
 					broadcast(tenant, { type: "summary_draft.ready", incidentId: notice.incidentId, draft });
+				return;
+			}
+			case "postmortem_draft": {
+				const draft = await postmortemDrafts.findById(tenant, notice.id);
+				if (draft) {
+					broadcast(tenant, {
+						type: "postmortem_draft.ready",
+						incidentId: notice.incidentId,
+						draft,
+					});
+				}
+				return;
+			}
+			case "postmortem": {
+				const postmortem = await postmortems.find(tenant, notice.incidentId as IncidentId);
+				if (postmortem) broadcast(tenant, { type: "postmortem.updated", postmortem });
 				return;
 			}
 			case "members_removed": {

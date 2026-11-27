@@ -50,7 +50,7 @@ export type AlertProcessorDeps = {
 	// the default. Spec: docs/features/on-call-schedules.md.
 	onCall?: OnCallAssigner;
 	// Queues an AI summary draft for an incident an alert opens. Spec: docs/features/ai-summaries.md.
-	summaries?: { dailyCap: number };
+	aiDrafts?: { dailyCap: number };
 };
 
 const MAX_ID_LENGTH = 200;
@@ -175,7 +175,7 @@ export const createAlertProcessor = ({
 	sources,
 	dispatcher = NO_DISPATCH,
 	onCall = NO_ASSIGNER,
-	summaries,
+	aiDrafts,
 }: AlertProcessorDeps): AlertProcessor => {
 	// findForIngest runs across tenants, so the source must belong to the alert's tenant.
 	const sourceOf = async (alert: Alert) => {
@@ -235,13 +235,13 @@ export const createAlertProcessor = ({
 				({ incidentId, opened }) => groupingAudit(alert, incidentId, opened, at, assignee),
 				({ opened }) => (opened && candidate ? openedNotice(candidate, name, assignee) : null),
 				({ opened }) =>
-					opened && candidate && summaries
+					opened && candidate && aiDrafts
 						? {
 								id: newId(),
 								incidentId: candidate.id,
 								requestedBy: null,
 								createdAt: at,
-								dailyCap: summaries.dailyCap,
+								dailyCap: aiDrafts.dailyCap,
 							}
 						: null,
 			);

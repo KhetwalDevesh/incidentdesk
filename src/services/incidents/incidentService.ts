@@ -30,8 +30,9 @@ export type IncidentServiceDeps = {
 	dispatcher?: DeliveryDispatcher;
 	// Picks the assignee of an incident a person opens. Spec: docs/features/on-call-schedules.md.
 	onCall?: OnCallAssigner;
-	// Queues an AI summary draft when an incident opens. Spec: docs/features/ai-summaries.md.
-	summaries?: { dailyCap: number };
+	// Queues AI drafts: a summary when an incident opens, a postmortem when it resolves.
+	// Spec: docs/features/ai-summaries.md and docs/features/ai-postmortems.md.
+	aiDrafts?: { dailyCap: number };
 };
 
 const NONE = "none";
@@ -61,7 +62,7 @@ export const createIncidentService = (
 		members,
 		dispatcher = NO_DISPATCH,
 		onCall = NO_ASSIGNER,
-		summaries,
+		aiDrafts,
 	}: IncidentServiceDeps = {},
 ): IncidentService => {
 	const emailOf = async (tenantId: TenantId, userId: string) =>
@@ -154,6 +155,16 @@ export const createIncidentService = (
 				{},
 			),
 			await noticeFor(principal, incident, event, at),
+			// A resolved incident gets a postmortem draft. Spec: docs/features/ai-postmortems.md.
+			kind === "resolve" && aiDrafts
+				? {
+						id: randomUUID(),
+						incidentId: id,
+						requestedBy: null,
+						createdAt: at,
+						dailyCap: aiDrafts.dailyCap,
+					}
+				: undefined,
 		);
 		if (!updated) {
 			return fail(
@@ -219,13 +230,13 @@ export const createIncidentService = (
 					createdAt,
 					assignee ? { email: assignee.email } : null,
 				),
-				summaries
+				aiDrafts
 					? {
 							id: randomUUID(),
 							incidentId: id,
 							requestedBy: null,
 							createdAt,
-							dailyCap: summaries.dailyCap,
+							dailyCap: aiDrafts.dailyCap,
 						}
 					: undefined,
 			);

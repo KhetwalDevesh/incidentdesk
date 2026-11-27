@@ -100,6 +100,11 @@ export type SummaryPrompt = {
 	system: string;
 	user: string;
 	schema: { name: string; schema: Record<string, unknown> };
+	// The most the answer may use. A ceiling: only tokens used are billed. Free "reasoning"
+	// models spend many on thinking first, so these are generous.
+	maxOutputTokens?: number;
+	// How long one call may take. Must stay under the worker's lease.
+	timeoutMs?: number;
 };
 
 // One call to the model. The writer never judges the content: the processor validates it.

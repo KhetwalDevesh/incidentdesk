@@ -43,6 +43,8 @@ const NoticeSchema = z.discriminatedUnion("kind", [
 	}),
 	z.object({ kind: z.literal("members_removed"), tenantId: Id, userIds: z.array(Id).max(50) }),
 	z.object({ kind: z.literal("summary_draft"), tenantId: Id, incidentId: Id, id: Id }),
+	z.object({ kind: z.literal("postmortem_draft"), tenantId: Id, incidentId: Id, id: Id }),
+	z.object({ kind: z.literal("postmortem"), tenantId: Id, incidentId: Id }),
 ]);
 
 // Notices come from our own transactions, but are parsed as untrusted all the same.

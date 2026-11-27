@@ -14,7 +14,8 @@ import { buildPrompt, MAX_PROMPT_ALERTS } from "./prompt";
 // At most this many attempts per draft. Retries wait these delays after attempts 1 and 2.
 export const SUMMARY_MAX_ATTEMPTS = 3;
 export const SUMMARY_RETRY_DELAYS_MS = [10_000, 60_000] as const;
-// Longer than a call's 60-second timeout, so a live attempt is never claimed twice.
+// Longer than any call's timeout (60 s for summaries, 100 s for postmortems), so a live
+// attempt is never claimed twice.
 export const SUMMARY_LEASE_MS = 120_000;
 
 export type SummaryProcessorDeps = {
@@ -29,7 +30,8 @@ export type SummaryProcessorDeps = {
 	onError?: (subject: string, error: unknown) => void;
 };
 
-const parseJson = (content: string): unknown => {
+// The model's text as JSON, or undefined. Still untrusted: the caller validates it.
+export const parseModelJson = (content: string): unknown => {
 	try {
 		return JSON.parse(content);
 	} catch {
@@ -96,7 +98,7 @@ export const createSummaryProcessor = ({
 			return;
 		}
 		// The model's answer is untrusted until it passes the schema, length limits included.
-		const output = DraftOutputSchema.safeParse(parseJson(result.content));
+		const output = DraftOutputSchema.safeParse(parseModelJson(result.content));
 		if (!output.success) {
 			await fail(draft, "invalid_output", "output did not match the schema");
 			return;

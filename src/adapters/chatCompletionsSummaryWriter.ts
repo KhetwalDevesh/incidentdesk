@@ -35,7 +35,7 @@ export const createChatCompletionsSummaryWriter = ({
 	model,
 	denyDataCollection,
 	timeoutMs = 60_000,
-	maxOutputTokens = 800,
+	maxOutputTokens = 2000,
 	fetch: send = fetch,
 }: ChatCompletionsConfig): SummaryWriter => ({
 	async write(prompt: SummaryPrompt): Promise<WriterResult> {
@@ -64,9 +64,9 @@ export const createChatCompletionsSummaryWriter = ({
 						require_parameters: true,
 						...(denyDataCollection ? { data_collection: "deny" } : {}),
 					},
-					max_tokens: maxOutputTokens,
+					max_tokens: prompt.maxOutputTokens ?? maxOutputTokens,
 				}),
-				signal: AbortSignal.timeout(timeoutMs),
+				signal: AbortSignal.timeout(prompt.timeoutMs ?? timeoutMs),
 			});
 		} catch (error) {
 			// Fixed text: the library's message may carry the URL.

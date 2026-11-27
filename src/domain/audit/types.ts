@@ -40,6 +40,10 @@ export type AuditDetails = {
 	// written by hand. Spec: docs/features/ai-summaries.md.
 	"incident.summary_set": { source: "draft" | "manual"; draftId: string };
 	"incident.severity_changed": { from: string; to: string };
+	// Never the body. draftId is "none" for a postmortem written by hand.
+	// Spec: docs/features/ai-postmortems.md.
+	"postmortem.saved": { source: "draft" | "manual"; draftId: string };
+	"postmortem.published": Record<string, never>;
 	"alert.grouped": { alertId: string; dedupKey: string };
 	"alert_source.created": { name: string };
 	// A schedule id, or "none".

@@ -33,6 +33,7 @@ import { InMemoryIncidentRepository } from "../src/repository/incidents/inMemory
 import { InMemoryNotificationChannelRepository } from "../src/repository/notifications/inMemoryNotificationChannelRepository";
 import { InMemoryNotificationDeliveryRepository } from "../src/repository/notifications/inMemoryNotificationDeliveryRepository";
 import { InMemoryOnCallRepository } from "../src/repository/onCall/inMemoryOnCallRepository";
+import { InMemoryPostmortemRepository } from "../src/repository/postmortems/inMemoryPostmortemRepository";
 import { InMemorySummaryDraftRepository } from "../src/repository/summaries/inMemorySummaryDraftRepository";
 import { createAlertIngestService } from "../src/services/alerts/alertIngestService";
 import { createAlertProcessor } from "../src/services/alerts/alertProcessor";
@@ -55,6 +56,8 @@ import { createDeliveryProcessor } from "../src/services/notifications/deliveryP
 import { createNotificationChannelService } from "../src/services/notifications/notificationChannelService";
 import { createOnCallAssigner } from "../src/services/onCall/onCallAssigner";
 import { createOnCallScheduleService } from "../src/services/onCall/onCallScheduleService";
+import { createPostmortemProcessor } from "../src/services/postmortems/postmortemProcessor";
+import { createPostmortemService } from "../src/services/postmortems/postmortemService";
 import { createSummaryProcessor } from "../src/services/summaries/summaryProcessor";
 import { createSummaryService } from "../src/services/summaries/summaryService";
 
@@ -95,6 +98,25 @@ export class FakeWebhookSender implements WebhookSender {
 	}
 }
 
+export const FAKE_SUMMARY = {
+	summary: "Checkout API latency is high in all regions.",
+	suggestedSeverity: "sev1",
+	rationale: "Customer-facing and widespread.",
+};
+
+export const FAKE_POSTMORTEM = {
+	summary: "Checkout API latency was high in every region.",
+	impact: "Customers checking out for 20 minutes.",
+	timeline: [
+		{ at: "2026-01-10T02:10:00Z", event: "Opened by an alert" },
+		{ at: "2026-01-10T02:30:00Z", event: "Resolved" },
+	],
+	suspectedCause: "The data suggests a slow payment dependency.",
+	wentWell: ["Acknowledged within two minutes"],
+	wentWrong: ["No alert on p99 latency"],
+	actionItems: ["Add a p99 latency alert"],
+};
+
 // Records each prompt and answers from a script, so tests never call a model. Default: a
 // valid draft. Spec: docs/features/ai-summaries.md.
 export class FakeSummaryWriter implements SummaryWriter {
@@ -108,11 +130,10 @@ export class FakeSummaryWriter implements SummaryWriter {
 		return (
 			answer ?? {
 				kind: "ok",
-				content: JSON.stringify({
-					summary: "Checkout API latency is high in all regions.",
-					suggestedSeverity: "sev1",
-					rationale: "Customer-facing and widespread.",
-				}),
+				// A valid answer for whichever schema was asked for.
+				content: JSON.stringify(
+					prompt.schema.name === "incident_postmortem" ? FAKE_POSTMORTEM : FAKE_SUMMARY,
+				),
 				model: "test/fake-model",
 				inputTokens: 1200,
 				outputTokens: 80,
@@ -181,6 +202,7 @@ export const buildTestSystem = (
 	});
 	const policy = createWebhookPolicy(TEST_WEBHOOK_ORIGINS);
 	const drafts = new InMemorySummaryDraftRepository(feed);
+	const postmortems = new InMemoryPostmortemRepository(audit, feed);
 	const incidents = new InMemoryIncidentRepository(audit, deliveries, accounts, feed, drafts);
 	const views = createIncidentViews(accounts);
 	const dashboardDeps = {
@@ -200,6 +222,8 @@ export const buildTestSystem = (
 		views,
 		schedules,
 		drafts,
+		postmortemDrafts: incidents.postmortemDrafts,
+		postmortems,
 		dashboard: (tenantId) => createDashboardBuilder(dashboardDeps)(tenantId, null),
 		now: options.alertNow,
 		// Short, so stream tests need not wait the production second.
@@ -214,7 +238,7 @@ export const buildTestSystem = (
 			dispatcher,
 			onCall,
 			now: options.alertNow,
-			summaries: { dailyCap: options.aiDailyCap ?? 100 },
+			aiDrafts: { dailyCap: options.aiDailyCap ?? 100 },
 		}),
 		memberService: createMemberService(accounts),
 		notificationChannelService: createNotificationChannelService({
@@ -245,6 +269,13 @@ export const buildTestSystem = (
 			dailyCap: options.aiDailyCap ?? 100,
 			now: options.alertNow,
 		}),
+		postmortemService: createPostmortemService({
+			incidents,
+			drafts: incidents.postmortemDrafts,
+			postmortems,
+			dailyCap: options.aiDailyCap ?? 100,
+			now: options.alertNow,
+		}),
 		trustedProxyHops: options.trustedProxyHops ?? 0,
 	});
 	const processor = createAlertProcessor({
@@ -255,7 +286,7 @@ export const buildTestSystem = (
 		sources: alertSources,
 		dispatcher,
 		onCall,
-		summaries: { dailyCap: options.aiDailyCap ?? 100 },
+		aiDrafts: { dailyCap: options.aiDailyCap ?? 100 },
 	});
 	// A fake model: tests set its answers. No test ever calls a real provider.
 	const writer = new FakeSummaryWriter();
@@ -263,6 +294,14 @@ export const buildTestSystem = (
 		drafts,
 		incidents,
 		alerts,
+		writer,
+		now: options.alertNow,
+	});
+	const postmortemProcessor = createPostmortemProcessor({
+		drafts: incidents.postmortemDrafts,
+		incidents,
+		alerts,
+		audit,
 		writer,
 		now: options.alertNow,
 	});
@@ -290,6 +329,8 @@ export const buildTestSystem = (
 		drafts,
 		writer,
 		summaryProcessor,
+		postmortems,
+		postmortemProcessor,
 		schedules,
 		alerts,
 		queue,

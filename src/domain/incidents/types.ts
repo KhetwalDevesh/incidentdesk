@@ -100,6 +100,9 @@ export interface IncidentRepository {
 		// Written only when the update applies, like the notice's deliveries.
 		audit: AuditEntry,
 		notice?: DeliveryNotice,
+		// Queues a postmortem draft in the same transaction, when resolving.
+		// Spec: docs/features/ai-postmortems.md.
+		postmortemDraft?: DraftRequest,
 	): Promise<Incident | null>;
 	// Sets the summary, and the severity when the change has one, with their audit entries.
 	// A severity change applies only while the incident is unresolved and still has the

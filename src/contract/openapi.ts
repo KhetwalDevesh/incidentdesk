@@ -59,6 +59,12 @@ import {
 	OnCallSchema,
 	UpdateOnCallScheduleRequestSchema,
 } from "./onCall";
+import {
+	PostmortemDraftListSchema,
+	PostmortemDraftSchema,
+	PostmortemSchema,
+	SavePostmortemRequestSchema,
+} from "./postmortems";
 import { SetSummaryRequestSchema, SummaryDraftListSchema, SummaryDraftSchema } from "./summaries";
 
 const registry = new OpenAPIRegistry();
@@ -231,6 +237,89 @@ registry.registerPath({
 		404: problem("No such incident, or draftId is not a ready draft of it"),
 		409: problem("Severity change on a resolved incident, or the incident changed meanwhile"),
 		422: problem("Id or body failed validation"),
+	},
+});
+
+// AI postmortems. Spec: docs/features/ai-postmortems.md.
+const incidentParams = z.object({ id: z.uuid() });
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/incidents/{id}/postmortem-drafts",
+	summary: "Ask the AI for a fresh postmortem draft of a resolved incident",
+	description:
+		"Returns the pending draft if there is one. Written in the background, and only a suggestion until a member saves it. Over the tenant's daily AI cap, shared with summary drafts, the draft comes back skipped.",
+	security,
+	request: { params: incidentParams },
+	responses: {
+		202: json(PostmortemDraftSchema, "The queued, pending or skipped draft"),
+		...authErrors,
+		404: problem("No such incident in this tenant"),
+		409: problem("The incident is not resolved"),
+		422: problem("Id is not a UUID"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/incidents/{id}/postmortem-drafts",
+	summary: "List an incident's postmortem drafts, newest first",
+	security,
+	request: { params: incidentParams, query: PageQuerySchema },
+	responses: {
+		200: json(PostmortemDraftListSchema, "A page of drafts"),
+		...authErrors,
+		404: problem("No such incident in this tenant"),
+		422: problem("Id or query failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "get",
+	path: "/v1/incidents/{id}/postmortem",
+	summary: "Get an incident's postmortem",
+	security,
+	request: { params: incidentParams },
+	responses: {
+		200: json(PostmortemSchema, "The postmortem"),
+		...authErrors,
+		404: problem("No such incident in this tenant, or no postmortem yet"),
+		422: problem("Id is not a UUID"),
+	},
+});
+
+registry.registerPath({
+	method: "put",
+	path: "/v1/incidents/{id}/postmortem",
+	summary: "Save a resolved incident's postmortem, by hand or from a draft",
+	description:
+		"Any member may save. With only draftId, the body is the draft rendered as Markdown. A published postmortem stays published.",
+	security,
+	request: {
+		params: incidentParams,
+		body: { content: { "application/json": { schema: SavePostmortemRequestSchema } } },
+	},
+	responses: {
+		200: json(PostmortemSchema, "The saved postmortem"),
+		...authErrors,
+		404: problem("No such incident, or draftId is not a ready draft of it"),
+		409: problem("The incident is not resolved"),
+		422: problem("Id or body failed validation"),
+	},
+});
+
+registry.registerPath({
+	method: "post",
+	path: "/v1/incidents/{id}/postmortem/publish",
+	summary: "Publish an incident's postmortem",
+	description: "Any member may publish. Publishing again changes nothing.",
+	security,
+	request: { params: incidentParams },
+	responses: {
+		200: json(PostmortemSchema, "The published postmortem"),
+		...authErrors,
+		404: problem("No such incident in this tenant, or no postmortem yet"),
+		422: problem("Id is not a UUID"),
 	},
 });
 
@@ -540,7 +629,9 @@ registry.registerPath({
 		"on_call_schedule.deleted ({ id }); on_call_override.created ({ scheduleId, override: OnCallOverride });",
 		"on_call_override.deleted ({ scheduleId, id }).",
 		"incident.updated ({ incident }) when its summary or severity changes;",
-		"summary_draft.ready ({ incidentId, draft: SummaryDraft }) when a draft finishes.",
+		"summary_draft.ready ({ incidentId, draft: SummaryDraft }) when a draft finishes;",
+		"postmortem_draft.ready ({ incidentId, draft: PostmortemDraft }) when a postmortem draft finishes;",
+		"postmortem.updated ({ postmortem: Postmortem }) when a postmortem is saved or published.",
 		"The stream closes when the token expires or the member is removed. There is no replay.",
 		"Spec: docs/features/realtime-status.md.",
 	].join(" "),

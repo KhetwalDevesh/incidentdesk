@@ -1,6 +1,6 @@
 # AI postmortems
 
-Status: Approved
+Status: Done
 
 Phase 5, core flow step 7: "AI drafts a postmortem for a person to edit." This is the last Phase 5 item. It builds on `docs/features/ai-summaries.md` and reuses its model adapter, redaction, untrusted-data prompt and background draft queue.
 
@@ -70,13 +70,13 @@ The model must return exactly this shape. It is checked with Zod, limits include
 
 The same as summaries (`docs/features/ai-summaries.md`, "The AI call"), with three differences:
 
-- **Output:** up to 2,000 tokens instead of 800, since a postmortem is longer.
+- **Output:** up to 8,000 tokens, and a 100-second timeout (under the worker's 120-second lease). Raised from 2,000 tokens during implementation: in a live check, free reasoning models on `openrouter/free` were cut off at 2,000 three times out of three. At 8,000 they gave a valid draft three times out of three, in 14 to 27 seconds, using up to about 7,000 tokens. Only tokens used are billed.
 - **Schema:** its own JSON schema (`incident_postmortem`), with the sections above.
 - **Prompt:** its own fixed system prompt, asking for facts only from the data. The suspected cause must be phrased as a hypothesis, and action items must not name people.
 
 Everything else is shared:
 
-- **Provider:** OpenRouter through the OpenAI-compatible API; `AI_MODEL` (`openrouter/free` in development, Qwen 3 in production); the data policy setting.
+- **Provider:** OpenRouter through the OpenAI-compatible API, with the free `openrouter/free` router in development and production (decided by the user; see `docs/features/ai-summaries.md` for what that means for data, limits and reliability).
 - **Behaviour:** the 60-second timeout, retries after 10 seconds then 1 minute (3 attempts in all), and skipping as `ai_disabled` without a key.
 
 ### Prompt and untrusted data
@@ -148,6 +148,8 @@ Migration `0019_create_postmortems.sql`:
 
   Both have the incident as resource. Never the body text.
 - **The daily cap's lock key** becomes shared by both kinds of draft (`ai_drafts:<tenant>`), and the cap counts both tables.
+- **Built as:** `src/repository/ai/postgresDraftBudget.ts` (the lock, and a count over both tables) and its in-memory twin `InMemoryDraftBudget`, shared by both draft stores.
+- **The timeline is read** in pages of 100, up to 500 audit entries. Runs of grouped alerts collapse into one step with a count ("3 alerts grouped into the incident"), so a long alert storm can't push the resolution out of the 50 steps kept.
 
 Code:
 
@@ -202,12 +204,12 @@ Code:
 
 ## Done when
 
-- [ ] Resolving queues one postmortem draft in its transaction; one pending draft per incident; summary and postmortem drafts share the daily cap under concurrency, the same in memory and in Postgres (`tests/postmortemRepository.parity.test.ts`)
-- [ ] The timeline reduction turns audit entries into actions, times and roles with no ids, emails or names; the prompt fences everything as data and leaves out the oldest alerts and timeline entries, with counts (`src/services/postmortems/postmortemPrompt.test.ts`)
-- [ ] A ready draft renders to the documented Markdown (`src/services/postmortems/postmortemMarkdown.test.ts`)
-- [ ] The worker produces `ready`, `invalid_output`, `provider_error` with retries, and `ai_disabled` drafts, with a fake writer (`src/services/postmortems/postmortemProcessor.test.ts`)
-- [ ] Any member requests, lists, saves (by hand, from a draft, or both), reads and publishes; unresolved gets 409, a non-ready or foreign draft 404, an empty save 422 (`tests/postmortems.contract.test.ts`)
-- [ ] Saving and publishing are audited without body text, and stream as `postmortem.updated`; finished drafts stream as `postmortem_draft.ready` (`tests/audit.contract.test.ts`, `tests/events.contract.test.ts`)
-- [ ] Another tenant can't read, draft, save or publish, and no prompt carries another tenant's data, ids, emails or names (`tests/security.test.ts`, "ai postmortems")
-- [ ] Contract regenerated: additive only
-- [ ] `pnpm check` passes
+- [x] Resolving queues one postmortem draft in its transaction; one pending draft per incident; summary and postmortem drafts share the daily cap under concurrency, the same in memory and in Postgres (`tests/postmortemRepository.parity.test.ts`)
+- [x] The timeline reduction turns audit entries into actions, times and roles with no ids, emails or names; the prompt fences everything as data and leaves out the oldest alerts and timeline entries, with counts (`src/services/postmortems/postmortemPrompt.test.ts`)
+- [x] A ready draft renders to the documented Markdown (`src/services/postmortems/postmortemMarkdown.test.ts`)
+- [x] The worker produces `ready`, `invalid_output`, `provider_error` with retries, and `ai_disabled` drafts, with a fake writer (`src/services/postmortems/postmortemProcessor.test.ts`)
+- [x] Any member requests, lists, saves (by hand, from a draft, or both), reads and publishes; unresolved gets 409, a non-ready or foreign draft 404, an empty save 422 (`tests/postmortems.contract.test.ts`)
+- [x] Saving and publishing are audited without body text, and stream as `postmortem.updated`; finished drafts stream as `postmortem_draft.ready` (`tests/audit.contract.test.ts`, `tests/events.contract.test.ts`)
+- [x] Another tenant can't read, draft, save or publish, and no prompt carries another tenant's data, ids, emails or names (`tests/security.test.ts`, "ai postmortems")
+- [x] Contract regenerated: additive only
+- [x] `pnpm check` passes
