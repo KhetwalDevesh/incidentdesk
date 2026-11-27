@@ -1,6 +1,6 @@
 # AI summaries
 
-Status: Approved
+Status: Done
 
 Phase 5, core flow step 3: "AI drafts a summary and suggests a severity. A person confirms it."
 
@@ -12,7 +12,7 @@ Decided by the user:
 | What is sent to the AI | The incident's title and severity, and up to its 20 most recent alerts: title, severity, status, time received and details |
 | Confirming | Any member can accept a draft, edit its text first, and set the incident's severity (the suggested one or another). Any member can also edit the summary later |
 | Cost | At most 100 drafts per tenant per UTC day. Beyond that, drafts are skipped with a reason, and incidents work as normal |
-| Model | An open-source Qwen 3 model, called through OpenRouter: the free variant in development, the paid variant in production. Not Claude, and nothing self-hosted |
+| Model | Open models through OpenRouter. Production: Qwen 3 (`qwen/qwen3-30b-a3b-instruct-2507`, paid). Development: the free `openrouter/free` router, since OpenRouter lists no free Qwen 3 model (checked during implementation; decided by the user). Not Claude, and nothing self-hosted |
 
 ## Goal
 
@@ -52,17 +52,18 @@ Rules:
 
 - **Provider:** OpenRouter, a hosted gateway that runs open models on its providers' GPUs. Nothing is self-hosted: the worker sends one HTTPS request per draft, as it does for Slack.
 - **Protocol:** the OpenAI-compatible `POST {AI_BASE_URL}/chat/completions`, called with plain `fetch`. There is no SDK, so no new dependency. Any server that speaks this protocol works by changing settings, including Groq, or Ollama or vLLM if self-hosting is wanted later.
-- **Model:** a Qwen 3 instruct model (Apache 2.0).
-  - **Development:** its `:free` variant on OpenRouter, which costs nothing and allows 50 requests a day (1,000 a day once $10 of credits has been bought).
-  - **Production:** the same model without `:free`, paid per token.
-  - **The exact model id** is chosen and checked against OpenRouter's model list during implementation, and goes in `AI_MODEL` and `.env.example`. Qwen 2.5 7B, the first choice, is no longer listed by OpenRouter or the other hosts checked.
+- **Model** (decided by the user after checking OpenRouter's model list during implementation):
+  - **Production:** `qwen/qwen3-30b-a3b-instruct-2507`, an open Qwen 3 instruct model (Apache 2.0). It supports strict JSON schemas, has a 262K context, and costs $0.10 per million input tokens and $0.30 per million output, so one draft (about 3,000 tokens in, 300 out) costs about $0.0004.
+  - **Development:** `openrouter/free`, OpenRouter's router across its free models. It costs nothing, but the model can differ between requests, so draft quality varies. OpenRouter lists no free Qwen 3 model, and Qwen 2.5 7B, the first choice, is no longer offered.
+  - **Caveat, found in the live check:** the free router may choose a free model that is not open source. One test request went to Baidu ERNIE 5.5 Flash. To keep development on an open model, pin a free open-weights one in `AI_MODEL` instead, such as `google/gemma-4-26b-a4b-it:free`, which was listed during implementation. It supports JSON mode but not strict schemas, so Zod catches what it gets wrong.
+  - Both are just values of `AI_MODEL`: no code depends on which model answers.
 - **Structured output.**
   - **Requested schema:** the request asks for `response_format: { type: "json_schema", json_schema: { strict: true, schema } }` (`summary`, `suggestedSeverity`, `rationale`).
   - **Routing:** with `provider: { require_parameters: true }`, OpenRouter only uses providers that support it.
   - **Always checked:** the response is validated with a Zod schema, including the length limits, before anything is stored. A free model that ignores the schema just produces an `invalid_output` draft.
 - **Data policy in production:** the request asks OpenRouter to use only providers that don't store or train on prompts (`provider: { data_collection: "deny" }`). Its exact name and behaviour are checked against OpenRouter's documentation during implementation. In development this is a setting (`AI_DENY_DATA_COLLECTION`), since free models may have no provider that meets it.
 - **Timeout:** each call times out after 60 seconds, counted as a provider error.
-- **Retries:** 429, 5xx, timeouts and lost connections are retried by the worker after 10 seconds, 1 minute, then 5 minutes, at most 3 attempts in all. After that the draft is `provider_error`. Other 4xx, such as a bad key or an unknown model, fail at once as `provider_error`.
+- **Retries:** 408, 429, 5xx (including OpenRouter's 524 and 529), an error reported inside a 200, timeouts and lost connections are retried by the worker, after 10 seconds and then 1 minute: at most 3 attempts in all. After that the draft is `provider_error`. Other 4xx, such as a bad key, no credit or an unknown model, fail at once as `provider_error`.
 - **Recorded on the draft:**
   - the model that answered, from the response's `model` field, returned as `model` so the draft is labelled as an AI suggestion from that model;
   - the prompt and completion token counts, from `usage`, which are never returned and are kept for cost reporting.
@@ -142,7 +143,7 @@ Code:
 - **Config:**
   - `AI_BASE_URL` (default `https://openrouter.ai/api/v1`);
   - `AI_API_KEY` (optional, worker only; without it drafts are skipped);
-  - `AI_MODEL` (required when `AI_API_KEY` is set: the Qwen 3 id, with `:free` in development);
+  - `AI_MODEL` (required when `AI_API_KEY` is set: `openrouter/free` in development, `qwen/qwen3-30b-a3b-instruct-2507` in production);
   - `AI_DENY_DATA_COLLECTION` (default `true`; set `false` only for free models in development);
   - `AI_DAILY_DRAFT_CAP` (default 100).
 
@@ -193,12 +194,12 @@ Code:
 
 ## Done when
 
-- [ ] Opening an incident, by a person or an alert, queues one draft in its transaction; joining alerts queue none; one pending draft per incident; the daily cap holds under concurrency, the same in memory and in Postgres (`tests/summaryDraftRepository.parity.test.ts`)
-- [ ] The worker turns a pending draft into `ready`, retries provider errors, and records `invalid_output`, `provider_error` (retried and not), `over_daily_cap` and `ai_disabled` correctly, with a fake writer (`src/services/summaries/summaryProcessor.test.ts`)
-- [ ] Redaction removes credential-like keys, emails, bearer tokens, JWTs, cloud and API keys and long secrets, and leaves ordinary text alone (`src/services/summaries/redact.test.ts`)
-- [ ] The prompt carries the listed fields, wraps alert data as data, and never includes emails, ids or secrets; the request carries the schema and the data policy; model output is validated with Zod; provider errors map to retry or fail (`src/adapters/chatCompletionsSummaryWriter.test.ts`, with a stubbed `fetch`)
-- [ ] Any member requests, lists and accepts drafts, edits the summary and sets severity; a non-ready or foreign draft gets 404, and a resolved incident's severity gets 409 (`tests/summaries.contract.test.ts`)
-- [ ] Summary and severity changes are audited without summary text, and stream as `incident.updated`; finished drafts stream as `summary_draft.ready` (`tests/audit.contract.test.ts`, `tests/events.contract.test.ts`)
-- [ ] Another tenant's incidents and drafts can't be read, drafted or accepted (`tests/security.test.ts`, "ai summaries")
-- [ ] Contract regenerated: additive only
-- [ ] `pnpm check` passes
+- [x] Opening an incident, by a person or an alert, queues one draft in its transaction; joining alerts queue none; one pending draft per incident; the daily cap holds under concurrency, the same in memory and in Postgres (`tests/summaryDraftRepository.parity.test.ts`)
+- [x] The worker turns a pending draft into `ready`, retries provider errors, and records `invalid_output`, `provider_error` (retried and not), `over_daily_cap` and `ai_disabled` correctly, with a fake writer (`src/services/summaries/summaryProcessor.test.ts`)
+- [x] Redaction removes credential-like keys, emails, bearer tokens, JWTs, cloud and API keys and long secrets, and leaves ordinary text alone (`src/services/summaries/redact.test.ts`)
+- [x] The prompt carries the listed fields, wraps alert data as data, and never includes emails, ids or secrets (`src/services/summaries/prompt.test.ts`); the request carries the schema and the data policy, and provider errors map to retry or fail (`src/adapters/chatCompletionsSummaryWriter.test.ts`, with a stubbed `fetch`); model output is validated with Zod (`src/services/summaries/summaryProcessor.test.ts`)
+- [x] Any member requests, lists and accepts drafts, edits the summary and sets severity; a non-ready or foreign draft gets 404, and a resolved incident's severity gets 409 (`tests/summaries.contract.test.ts`)
+- [x] Summary and severity changes are audited without summary text, and stream as `incident.updated`; finished drafts stream as `summary_draft.ready` (`tests/audit.contract.test.ts`, `tests/events.contract.test.ts`)
+- [x] Another tenant's incidents and drafts can't be read, drafted or accepted, and no prompt carries another tenant's data, emails, keys or ids (`tests/security.test.ts`, "ai summaries")
+- [x] Contract regenerated: additive only
+- [x] `pnpm check` passes

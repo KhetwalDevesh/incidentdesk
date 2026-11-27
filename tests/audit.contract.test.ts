@@ -481,4 +481,45 @@ describe("audit log contract", () => {
 			expect(JSON.stringify(await events(owner, "?limit=100"))).not.toContain("initech.example");
 		});
 	});
+
+	// Spec: docs/features/ai-summaries.md
+	describe("summaries", () => {
+		it("records a summary and a severity change by ids, never the summary text", async () => {
+			const incident = await createIncident();
+			await system.summaryProcessor.process();
+			const draft = (await (
+				await system.app.request(
+					`/v1/incidents/${incident.id}/summary-drafts`,
+					authed("acme-responder"),
+				)
+			).json()) as { items: { id: string }[] };
+			const put = (body: unknown) =>
+				system.app.request(`/v1/incidents/${incident.id}/summary`, {
+					...authed("acme-responder", body),
+					method: "PUT",
+				});
+
+			await put({
+				text: "Secret-ish customer detail in the summary.",
+				severity: "sev2",
+				draftId: draft.items[0]?.id,
+			});
+			await put({ text: "Edited by hand." });
+
+			const entries = (await timeline(incident.id)).filter(
+				(event) =>
+					event.action === "incident.summary_set" || event.action === "incident.severity_changed",
+			);
+			expect(entries).toMatchObject([
+				{
+					action: "incident.summary_set",
+					actor: { type: "user", id: "user-1" },
+					details: { source: "draft", draftId: draft.items[0]?.id },
+				},
+				{ action: "incident.severity_changed", details: { from: "sev1", to: "sev2" } },
+				{ action: "incident.summary_set", details: { source: "manual", draftId: "none" } },
+			]);
+			expect(JSON.stringify(entries)).not.toMatch(/Secret-ish|Edited by hand/);
+		});
+	});
 });

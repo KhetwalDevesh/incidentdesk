@@ -11,13 +11,21 @@ const SWEEP_INTERVAL_MS = 30_000;
 // Audit entries and deliveries past their 90-day retention. Spec: docs/features/audit-log.md.
 const PURGE_INTERVAL_MS = 60 * 60 * 1000;
 const ERROR_BACKOFF_MS = 5000;
+const SUMMARY_INTERVAL_MS = 2000;
 
 const config = loadConfig();
 // Ids only: alert content is untrusted and stays out of logs.
-const { processor, deliveryProcessor, purgeAudit, purgeDeliveries, purgeThrottle, pool } =
-	buildWorker(config, (subject, error) =>
-		console.error(`${subject} failed:`, error instanceof Error ? error.message : "unknown error"),
-	);
+const {
+	processor,
+	deliveryProcessor,
+	summaryProcessor,
+	purgeAudit,
+	purgeDeliveries,
+	purgeThrottle,
+	pool,
+} = buildWorker(config, (subject, error) =>
+	console.error(`${subject} failed:`, error instanceof Error ? error.message : "unknown error"),
+);
 pool.on("error", (error) => console.error("Idle Postgres client error:", error.message));
 
 const stop = new AbortController();
@@ -45,6 +53,8 @@ await Promise.all([
 	loop("Alert sweep", () => processor.sweep(), SWEEP_INTERVAL_MS),
 	loop("Delivery batch", () => deliveryProcessor.processMessages(), 0),
 	loop("Delivery sweep", () => deliveryProcessor.sweep(), SWEEP_INTERVAL_MS),
+	// AI summary drafts. Spec: docs/features/ai-summaries.md.
+	loop("Summary drafts", () => summaryProcessor.process(), SUMMARY_INTERVAL_MS),
 	loop("Audit purge", purgeAudit, PURGE_INTERVAL_MS),
 	loop("Delivery purge", purgeDeliveries, PURGE_INTERVAL_MS),
 	// Sign-in throttle keys idle for a day. Spec: docs/features/login-rate-limiting.md.

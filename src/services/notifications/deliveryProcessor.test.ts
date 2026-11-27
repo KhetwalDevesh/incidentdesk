@@ -132,6 +132,7 @@ const setup = () => {
 			lastAlertAt: null,
 			assigneeId: null,
 			assignmentCount: 0,
+			summary: null,
 		};
 		await incidents.create(tenant, incident, [anAudit(tenant)], {
 			incidentId: incident.id,

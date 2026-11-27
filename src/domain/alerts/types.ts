@@ -16,6 +16,7 @@ import type { Principal, TenantId } from "../shared/identity";
 import type { MessageQueue, QueueMessage } from "../shared/queue";
 import type { RequestContext } from "../shared/request";
 import type { Result } from "../shared/result";
+import type { DraftRequest } from "../summaries/types";
 
 // Spec: docs/features/alert-ingestion.md
 
@@ -124,7 +125,11 @@ export interface AlertRepository {
 		audit: (outcome: GroupingOutcome) => AuditEntry[],
 		// The Slack deliveries for the outcome, written in the same transaction.
 		notice?: (outcome: GroupingOutcome) => DeliveryNotice | null,
+		// The AI summary draft for an incident the alert opened, queued in the same transaction.
+		draft?: (outcome: GroupingOutcome) => DraftRequest | null,
 	): Promise<{ incidentId: IncidentId | null } | null>;
+	// The incident's alerts, newest first. Bounded by `limit`.
+	listForIncident(tenantId: TenantId, incidentId: IncidentId, limit: number): Promise<Alert[]>;
 	// Records a failed attempt. A null retryAt marks the alert failed for good.
 	fail(
 		tenantId: TenantId,

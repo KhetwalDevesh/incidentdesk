@@ -36,6 +36,10 @@ export type AuditDetails = {
 	"incident.resolved": Record<string, never>;
 	// Member ids, or "none". manual is "true" for a reassignment, "false" at opening.
 	"incident.assigned": { from: string; to: string; manual: "true" | "false" };
+	// Never the summary text, which may quote alert content. draftId is "none" for a summary
+	// written by hand. Spec: docs/features/ai-summaries.md.
+	"incident.summary_set": { source: "draft" | "manual"; draftId: string };
+	"incident.severity_changed": { from: string; to: string };
 	"alert.grouped": { alertId: string; dedupKey: string };
 	"alert_source.created": { name: string };
 	// A schedule id, or "none".

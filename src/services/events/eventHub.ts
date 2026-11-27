@@ -9,6 +9,7 @@ import type {
 import type { Incident, IncidentRepository, IncidentView } from "../../domain/incidents/types";
 import type { OnCallRepository } from "../../domain/onCall/types";
 import type { Principal, TenantId } from "../../domain/shared/identity";
+import type { SummaryDraftRepository } from "../../domain/summaries/types";
 
 // Spec: docs/features/realtime-status.md, "How it works".
 
@@ -22,6 +23,7 @@ export type EventHubDeps = {
 	// Shows incidents exactly as the API does, with the assignee's email.
 	views: (tenantId: TenantId, incidents: Incident[]) => Promise<IncidentView[]>;
 	schedules: Pick<OnCallRepository, "findById" | "findOverride">;
+	drafts: Pick<SummaryDraftRepository, "findById">;
 	dashboard: (tenantId: TenantId) => Promise<Dashboard>;
 	now?: () => Date;
 	maxStreamsPerMember?: number;
@@ -46,6 +48,7 @@ export const createEventHub = ({
 	incidents,
 	views,
 	schedules,
+	drafts,
 	dashboard,
 	now = () => new Date(),
 	maxStreamsPerMember = MAX_STREAMS_PER_MEMBER,
@@ -156,6 +159,12 @@ export const createEventHub = ({
 				if (override) {
 					broadcast(tenant, { type: notice.event, scheduleId: notice.scheduleId, override });
 				}
+				return;
+			}
+			case "summary_draft": {
+				const draft = await drafts.findById(tenant, notice.id);
+				if (draft)
+					broadcast(tenant, { type: "summary_draft.ready", incidentId: notice.incidentId, draft });
 				return;
 			}
 			case "members_removed": {

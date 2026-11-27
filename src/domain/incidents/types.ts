@@ -5,6 +5,7 @@ import type { DeliveryNotice } from "../notifications/types";
 import type { Principal, TenantId } from "../shared/identity";
 import type { RequestContext } from "../shared/request";
 import type { Result } from "../shared/result";
+import type { DraftRequest } from "../summaries/types";
 
 export type Incident = {
 	id: IncidentId;
@@ -27,6 +28,22 @@ export type Incident = {
 	assigneeId: string | null;
 	// How many times it was reassigned by hand. Numbers the reassignments' Slack deliveries.
 	assignmentCount: number;
+	// Written or accepted by a member, or null. See docs/features/ai-summaries.md.
+	summary: IncidentSummary | null;
+};
+
+export type IncidentSummary = {
+	text: string;
+	updatedAt: Date;
+	updatedBy: string;
+	// The AI draft it was accepted from, or null when written by hand.
+	draftId: string | null;
+};
+
+// A summary change, with a severity change when one was asked for.
+export type SummaryChange = {
+	summary: IncidentSummary;
+	severity: { from: Incident["severity"]; to: Incident["severity"] } | null;
 };
 
 export type IncidentPage = { items: Incident[]; total: number };
@@ -68,6 +85,8 @@ export interface IncidentRepository {
 		incident: Omit<Incident, "tenantId">,
 		audit: AuditEntry[],
 		notice?: DeliveryNotice,
+		// Queues the incident's first AI summary draft in the same transaction.
+		draft?: DraftRequest,
 	): Promise<Incident>;
 	findById(tenantId: TenantId, id: IncidentId): Promise<Incident | null>;
 	list(tenantId: TenantId, page: PageQuery): Promise<IncidentPage>;
@@ -81,6 +100,15 @@ export interface IncidentRepository {
 		// Written only when the update applies, like the notice's deliveries.
 		audit: AuditEntry,
 		notice?: DeliveryNotice,
+	): Promise<Incident | null>;
+	// Sets the summary, and the severity when the change has one, with their audit entries.
+	// A severity change applies only while the incident is unresolved and still has the
+	// `from` severity, so it cannot race another change. Returns null when nothing matched.
+	setSummary(
+		tenantId: TenantId,
+		id: IncidentId,
+		change: SummaryChange,
+		audit: AuditEntry[],
 	): Promise<Incident | null>;
 	// Moves an unresolved incident from `from` to `to`, and counts the reassignment. In one
 	// transaction, it checks `to` is still a member (holding them until commit), writes the
