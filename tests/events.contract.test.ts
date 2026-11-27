@@ -74,20 +74,27 @@ describe("realtime events contract", () => {
 		await send("POST", `/v1/incidents/${incident.id}/assign`, admin, { assigneeId: grace.id });
 		await send("POST", `/v1/incidents/${incident.id}/acknowledge`, grace.token, {});
 		await send("POST", `/v1/incidents/${incident.id}/resolve`, grace.token, {});
-		const events = await stream.until("dashboard");
+		// A dashboard may arrive between changes when they are slower than the debounce, so read
+		// on to the dashboard that follows the last change.
+		const events = await stream.until("incident.resolved");
+		events.push(...(await stream.until("dashboard")));
+		const changes = events.filter((event) => event.event !== "dashboard");
 
-		expect(checked(events)).toEqual([
+		checked(events);
+		expect(changes.map((event) => event.event)).toEqual([
 			"incident.opened",
 			"incident.reassigned",
 			"incident.acknowledged",
 			"incident.resolved",
-			"dashboard",
 		]);
-		expect(events[1]?.data).toMatchObject({
+		expect(changes[1]?.data).toMatchObject({
 			incident: { id: incident.id, assignee: { id: grace.id, email: "grace@acme.example" } },
 		});
-		expect(events[3]?.data).toMatchObject({ incident: { status: "resolved" } });
-		expect(events[4]?.data).toMatchObject({ totals: { open: 0, acknowledged: 0 } });
+		expect(changes[3]?.data).toMatchObject({ incident: { status: "resolved" } });
+		expect(events.at(-1)).toMatchObject({
+			event: "dashboard",
+			data: { totals: { open: 0, acknowledged: 0 } },
+		});
 		await stream.close();
 	});
 
