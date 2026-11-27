@@ -157,19 +157,21 @@ export const buildPostmortemPrompt = (
 	alerts: Alert[],
 	reduced: { timeline: TimelineEntry[]; omitted: number },
 ): SummaryPrompt => {
-	const keptAlerts = alerts.slice(0, MAX_PROMPT_ALERTS);
+	// Redacted once, up front: the loop below only drops entries.
+	const keptAlerts = alerts.slice(0, MAX_PROMPT_ALERTS).map(alertData);
+	const incidentData = {
+		title: redactText(incident.title),
+		severity: incident.severity,
+		openedAt: incident.createdAt.toISOString(),
+		acknowledgedAt: incident.acknowledgedAt?.toISOString() ?? null,
+		resolvedAt: incident.resolvedAt?.toISOString() ?? null,
+		summary: incident.summary ? redactText(incident.summary.text) : null,
+	};
 	const render = (alertCount: number, stepCount: number) => {
 		const steps = reduced.timeline.slice(reduced.timeline.length - stepCount);
 		const data = {
-			incident: {
-				title: redactText(incident.title),
-				severity: incident.severity,
-				openedAt: incident.createdAt.toISOString(),
-				acknowledgedAt: incident.acknowledgedAt?.toISOString() ?? null,
-				resolvedAt: incident.resolvedAt?.toISOString() ?? null,
-				summary: incident.summary ? redactText(incident.summary.text) : null,
-			},
-			alerts: keptAlerts.slice(0, alertCount).map(alertData).reverse(),
+			incident: incidentData,
+			alerts: keptAlerts.slice(0, alertCount).reverse(),
 			omittedOlderAlerts: alerts.length - alertCount,
 			timeline: steps,
 			omittedOlderTimelineSteps: reduced.omitted + reduced.timeline.length - stepCount,
