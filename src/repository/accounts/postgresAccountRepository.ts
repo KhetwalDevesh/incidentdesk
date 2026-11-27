@@ -22,8 +22,7 @@ type UserRow = {
 	id: string;
 	tenant_id: string;
 	email: string;
-	// May still be 'viewer' while a deploy rolls out: see migration 0013.
-	role: Role | "viewer";
+	role: Role;
 	password_hash: string | null;
 	created_at: Date;
 };
@@ -32,8 +31,7 @@ const toUser = (row: UserRow): User => ({
 	id: row.id,
 	tenantId: row.tenant_id as TenantId,
 	email: row.email,
-	// The viewer role is gone. A row an old instance wrote reads as a responder, as 0013 made it.
-	role: row.role === "viewer" ? "responder" : row.role,
+	role: row.role,
 	passwordHash: row.password_hash,
 	createdAt: row.created_at,
 });
