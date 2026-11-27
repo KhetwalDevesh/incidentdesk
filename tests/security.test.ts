@@ -512,7 +512,11 @@ describe("request ids", () => {
 			headers: { "X-Request-ID": "bad id\twith spaces" },
 		});
 
-		expect(res.headers.get("X-Request-ID")).not.toContain("bad");
+		// A fresh UUID. Not "does not contain bad": b, a and d are hex digits, so a random UUID
+		// contains "bad" about once in 125 runs.
+		const id = res.headers.get("X-Request-ID");
+		expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(id).not.toBe("bad id\twith spaces");
 	});
 });
 
